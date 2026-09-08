@@ -33,6 +33,7 @@
 #include <grace/config/config_parser.hh>
 #include <grace/physics/eos/eos_storage.hh>
 #include <array>
+#include <vector>
 
 /**
  * @brief Atmosphere treatment parameters
@@ -87,6 +88,11 @@ struct riemann_params_t {
  * @brief Excision parameters
  *
  */
+//! Most horizons the excision region can be built from. Three is already a
+//! full binary plus its common horizon; eight leaves room and keeps the struct
+//! a POD small enough to travel by value into a device kernel.
+constexpr int GRACE_MAX_EXCISION_SPHERES = 8 ;
+
 struct excision_params_t {
     double rho_ex ;         //!< Excision rho
     double temp_ex ;        //!< Excision temp 
@@ -94,7 +100,67 @@ struct excision_params_t {
     double r_ex ;           //!< Excision radius
     double alp_ex ;         //!< Excision alpha
     bool excise_by_radius ; //!< Whether excision is radius based (CKS) or alpha based.
+    //! Whether apparent horizons contribute to the excised region. Additive to
+    //! the lapse test, never a replacement -- see the note on get_excision_params().
+    bool excise_by_horizon = false ;
+    //! Spheres inscribed in the located horizons: (cx, cy, cz, r).
+    int    n_ex_spheres = 0 ;
+    double ex_sphere[GRACE_MAX_EXCISION_SPHERES][4] = {} ;
+
+    //! Whether a Cartesian point lies inside any of the horizon spheres.
+    KOKKOS_INLINE_FUNCTION
+    bool inside_horizon(double const* xyz) const {
+        for (int s = 0; s < n_ex_spheres; ++s) {
+            double const dx = xyz[0] - ex_sphere[s][0] ;
+            double const dy = xyz[1] - ex_sphere[s][1] ;
+            double const dz = xyz[2] - ex_sphere[s][2] ;
+            double const rr = ex_sphere[s][3] ;
+            if (dx*dx + dy*dy + dz*dz <= rr*rr) return true ;
+        }
+        return false ;
+    }
 } ; 
+
+namespace detail {
+
+//! Host-side store of the excision spheres, written by the apparent-horizon
+//! manager and read back by get_excision_params().
+//!
+//! A plain POD in a function-local static: no Kokkos handles, so no
+//! destruction-order hazard against Kokkos::finalize, and no singleton to
+//! register. The physics side never learns that the geometry side exists --
+//! the horizon manager pushes, and this is the only thing in between.
+struct excision_sphere_store_t {
+    int    n = 0 ;
+    double s[GRACE_MAX_EXCISION_SPHERES][4] = {} ;
+} ;
+
+inline excision_sphere_store_t& excision_sphere_store() {
+    static excision_sphere_store_t store ;
+    return store ;
+}
+
+}  // namespace detail
+
+/**
+ * @brief Publish the spheres to be excised, in Cartesian coordinates.
+ *
+ * Each entry is (cx, cy, cz, r). Anything beyond GRACE_MAX_EXCISION_SPHERES is
+ * dropped, which is the right failure: silently excising a subset is far safer
+ * than a buffer overrun, and the manager warns.
+ */
+inline void set_excision_spheres(std::vector<std::array<double,4>> const& spheres) {
+    auto& store = detail::excision_sphere_store() ;
+    int n = static_cast<int>(spheres.size()) ;
+    if (n > GRACE_MAX_EXCISION_SPHERES) n = GRACE_MAX_EXCISION_SPHERES ;
+    for (int i = 0; i < n; ++i)
+        for (int d = 0; d < 4; ++d) store.s[i][d] = spheres[static_cast<size_t>(i)][d] ;
+    store.n = n ;
+}
+
+//! Drop every excision sphere, e.g. when no horizon is currently located.
+inline void clear_excision_spheres() { detail::excision_sphere_store().n = 0 ; }
+
 
 //**************************************************************************************************/
 /* Auxiliaries */
@@ -252,12 +318,31 @@ excision_params_t get_excision_params()
   excision_params_t excision_params ; 
     auto excision_kind = grace::get_param<std::string>("grmhd","excision","excision_criterion"); 
     //excision_pars["excision_criterion"].as<std::string>() ;
+    excision_params.excise_by_radius  = false ;
+    excision_params.excise_by_horizon = false ;
     if ( excision_kind == "radius" ) {
         excision_params.excise_by_radius = true ;
     } else if ( excision_kind == "lapse") {
-        excision_params.excise_by_radius = false ;
+        // nothing to set: the lapse test is the fallthrough
+    } else if ( excision_kind == "horizon") {
+        // Additive to the lapse test, deliberately, rather than replacing it.
+        // Before the first horizon is located -- at startup, and throughout a
+        // binary inspiral before merger -- there is nothing to excise inside,
+        // and a criterion that switched the lapse test off would leave the run
+        // with no excision at all exactly where it currently has some. The
+        // union degrades to today's behaviour when no horizon is available and
+        // is strictly safer once one is.
+        excision_params.excise_by_horizon = true ;
     } else {
         ERROR("Unrecognized excision criterion") ; 
+    }
+
+    {
+        auto const& store = detail::excision_sphere_store() ;
+        excision_params.n_ex_spheres = excision_params.excise_by_horizon ? store.n : 0 ;
+        for (int i = 0; i < excision_params.n_ex_spheres; ++i)
+            for (int d = 0; d < 4; ++d)
+                excision_params.ex_sphere[i][d] = store.s[i][d] ;
     }
     excision_params.r_ex = grace::get_param<double>("grmhd","excision","excision_radius") ;
     excision_params.alp_ex = grace::get_param<double>("grmhd","excision","excision_lapse") ;

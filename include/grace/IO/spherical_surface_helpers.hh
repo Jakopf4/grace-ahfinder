@@ -39,6 +39,7 @@
 
 #include <array>
 #include <memory>
+#include <string>
 #include <tuple> 
 
 #include <Kokkos_Core.hpp>
@@ -168,13 +169,42 @@ struct  uniform_sampler_t {
 } ; 
 
 struct no_tracking_policy_t {
+    explicit no_tracking_policy_t(std::string const& = {}) {}
+
     bool track(
         double& radius,
         std::array<double,3>& center
     ) {
         return false;
     }
-} ; 
+} ;
+
+/**
+ * @brief Tracking policy that follows an apparent horizon.
+ *
+ * The detector's `tracking_target` names the horizon to follow (defaulting to
+ * the detector's own name); `tracking_radius_factor` scales the horizon's mean
+ * coordinate radius to give the detector radius, so a surface can sit at, say,
+ * twice the horizon radius and stay there as the hole moves and grows.
+ *
+ * Reports "no change" until the horizon has actually been found, so a detector
+ * keeps its configured geometry rather than collapsing onto an unset centroid
+ * during the early part of a run.
+ *
+ * The lookup is resolved lazily: the horizon manager exists by the time
+ * surfaces are constructed, but the horizon itself has no shape until the first
+ * search runs.
+ */
+struct ah_tracking_policy_t {
+    explicit ah_tracking_policy_t(std::string const& detector_name = {});
+
+    bool track(double& radius, std::array<double,3>& center);
+
+private:
+    std::string _target;
+    double      _radius_factor = 1.0;
+    int         _index         = -1;   //!< resolved on first successful lookup
+}; 
 
 
 }

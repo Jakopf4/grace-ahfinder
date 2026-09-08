@@ -36,6 +36,7 @@
 #include <grace/IO/spherical_surfaces.hh>
 
 #include <grace/IO/diagnostics/black_hole_diagnostics.hh>
+#include <grace/physics/horizon_flux_integrand.hh>
 
 #include <array>
 #include <vector>
@@ -162,117 +163,60 @@ bh_diagnostics::compute_local_fluxes(
         auto y = detector.points_h[ip].second[1] ; 
         auto z = detector.points_h[ip].second[2] ; 
 
-        double const one_over_alp = 1./metric.alp() ;
-        report_nan("one_over_alp",one_over_alp) ; 
-
-        // W^2 = 1 + z^2
-        double const W = Kokkos::sqrt(1+metric.square_vec({vx,vy,vz})) ; 
-
-        if (std::isnan(W)) {
-            GRACE_VERBOSE(
-                "NaN in W at point {} on detector {}:\n"
-                "  Primitives:\n"
-                "    g = [{}, {}, {}, {}, {}, {}]\n"
-                "    beta = ({}, {}, {})\n"
-                "    alp  = {}\n"
-                "    rho  = {}, eps = {}, press = {}\n"
-                "    z = ({}, {}, {})\n"
-                "    B = ({}, {}, {})\n"
-                "  Computed quantities:\n"
-                "    z^2 = {}\n"
-                "    one_over_alp = {}\n"
-                "  Coordinates:\n"
-                "    x = {}, y = {}, z = {}\n",
-                i, detector.name,
-                gxx, gxy, gxz, gyy, gyz, gzz,
-                betax, betay, betaz,
-                alp,
-                rho, eps, press,
-                vx, vy, vz,
-                bx, by, bz,
-                metric.square_vec({vx,vy,vz}),
-                one_over_alp,
-                x, y, z
-            );
-        }
-        report_nan("W",W) ; 
-        double const u0 = one_over_alp * W ; 
-
-        std::array<double,4> uU{{ 
-            u0, 
-            vx - one_over_alp * metric.beta(0), 
-            vy - one_over_alp * metric.beta(1), 
-            vz - one_over_alp * metric.beta(2) }};
-        auto uD = metric.lower_4vec(uU) ; 
-
-        double b0 = uD[1] * bx + uD[2] * by + uD[3] * bz ; 
-        double b1 = (bx+b0*uU[1])/u0;
-        double b2 = (by+b0*uU[2])/u0;
-        double b3 = (bz+b0*uU[3])/u0;
-        report_nan("bt",b0) ; 
-        report_nan("b1",b1) ; 
-        report_nan("b2",b2) ; 
-        report_nan("b3",b3) ; 
-
-        auto bD = metric.lower_4vec({b0,b1,b2,b3}) ; 
-
-        double bsq = b0 * bD[0] + b1 * bD[1] + b2 * bD[2] + b3*bD[3] ; 
-        report_nan("b2",bsq) ; 
-        double sth = sin(theta) ; 
+        double sth = sin(theta) ;
         double sph = sin(phi)   ;
         double cph = cos(phi)   ;
 
-        double ur, br, u_phi, b_phi, sqrtmdet ;
-        // transform sph to cart 
+        // Direction of the outward normal and of the azimuthal generator, in
+        // the coordinates the metric is expressed in. On a coordinate sphere
+        // "outward" is dr, so `dir` is the gradient dr/dx^i and the surface
+        // measure carries the r^2 sqrt(gamma) (or its CKS equivalent).
+        double dir[3], phi_dir[3], sqrtmdet ;
         if ( coord_system.get_is_cks() ) {
-            double a = coord_system.get_bh_spin() ; 
-            double a2 = SQR(a) ; 
-            double rad2 = SQR(x) + SQR(y) + SQR(z) ; 
-            double r2 = SQR(r) ; 
+            double a = coord_system.get_bh_spin() ;
+            double a2 = SQR(a) ;
+            double rad2 = SQR(x) + SQR(y) + SQR(z) ;
+            double r2 = SQR(r) ;
 
-            double drdx = r*x/(2.0*r2 - rad2 + a2) ; 
-            double drdy = r*y/(2.0*r2 - rad2 + a2) ; 
-            double drdz = (r*z + a2 * z / r) / (2.0*r2 - rad2 + a2) ;      
-            
-            ur = drdx * uU[1] + drdy * uU[2] + drdz * uU[3] ; 
-            br = drdx * b1 + drdy * b2 + drdz * b3 ;
+            dir[0] = r*x/(2.0*r2 - rad2 + a2) ;
+            dir[1] = r*y/(2.0*r2 - rad2 + a2) ;
+            dir[2] = (r*z + a2 * z / r) / (2.0*r2 - rad2 + a2) ;
 
-            u_phi = (-r*sph-a*cph)*sth*uD[1] + (r*cph-a*sph)*sth*uD[2] ; 
-            b_phi = (-r*sph-a*cph)*sth*bD[1] + (r*cph-a*sph)*sth*bD[2] ; 
+            phi_dir[0] = (-r*sph-a*cph)*sth ;
+            phi_dir[1] = ( r*cph-a*sph)*sth ;
+            phi_dir[2] = 0.0 ;
 
-            sqrtmdet = (r2 + SQR(a*cos(theta))) ; 
-
+            sqrtmdet = (r2 + SQR(a*cos(theta))) ;
         } else {
-            double drdx = x/r ; 
-            double drdy = y/r ; 
-            double drdz = z/r ;      
-        
-            ur = drdx * uU[1] + drdy * uU[2] + drdz * uU[3] ; 
-            br = drdx * b1 + drdy * b2 + drdz * b3 ;
+            dir[0] = x/r ;
+            dir[1] = y/r ;
+            dir[2] = z/r ;
 
-            u_phi = (-r*sph)*sth*uD[1] + (r*cph)*sth*uD[2] ; 
-            b_phi = (-r*sph)*sth*bD[1] + (r*cph)*sth*bD[2] ;
-            sqrtmdet = r * r * metric.sqrtg() ; 
+            phi_dir[0] = (-r*sph)*sth ;
+            phi_dir[1] = ( r*cph)*sth ;
+            phi_dir[2] = 0.0 ;
+
+            sqrtmdet = r * r * metric.sqrtg() ;
         }
-        double rhoh = rho + rho * eps + press ; 
 
-        double tr_0 = (rhoh + bsq) * ur * uD[0] - br * bD[0] ; 
-        
-        double tr_3 = (rhoh + bsq) * ur * u_phi - br * b_phi ; 
+        // The MHD algebra itself lives in one place, shared with the
+        // apparent-horizon flux integrals, which differ only in the direction
+        // and the measure.
+        auto const fi = flux_integrand(
+            metric, mhd_primitives_t{rho, eps, press, {vx,vy,vz}, {bx,by,bz}},
+            dir, phi_dir) ;
 
-        double phi_l = 0.5 * fabs(br*u0 - b0*ur) ; 
-
-        double const domega = detector.weights_h[ip] ; 
-        report_nan("domega",domega) ; 
-        report_nan("sqrtmdet",sqrtmdet) ; 
+        double const domega = detector.weights_h[ip] ;
+        report_nan("domega",domega) ;
+        report_nan("sqrtmdet",sqrtmdet) ;
         // accretion rate
-        flux_loc[0] += - domega * sqrtmdet * rho * ur ; 
-        // energy flux 
-        flux_loc[1] += - domega * sqrtmdet * tr_0 ; 
-        // angular momentum flux 
-        flux_loc[2] += domega * sqrtmdet * tr_3 ; 
-        // magnetic flux 
-        flux_loc[3] += domega * sqrtmdet * phi_l ; 
+        flux_loc[0] += domega * sqrtmdet * fi.mdot ;
+        // energy flux
+        flux_loc[1] += domega * sqrtmdet * fi.edot ;
+        // angular momentum flux
+        flux_loc[2] += domega * sqrtmdet * fi.ldot ;
+        // magnetic flux
+        flux_loc[3] += domega * sqrtmdet * fi.phi_B ;
 
     }
 

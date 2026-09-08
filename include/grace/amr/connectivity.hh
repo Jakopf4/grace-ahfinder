@@ -41,6 +41,8 @@
 #include <grace/amr/connectivities_impl.hh>
 
 #include <array>
+#include <vector>   // std::vector is used below; this header had been
+                    // relying on a transitive include to supply it.
 
 namespace grace { namespace amr { 
 //**************************************************************************************************

@@ -69,10 +69,39 @@ grmhd:
       Parameters describing excision conditions 
     excision_criterion:
       type: keyword 
-      allowed: ["lapse","radius"]
+      allowed: ["lapse","radius","horizon"]
       default: "lapse"
       description: >
-        Either excise when alpha<alpha_exc or r<r_exc 
+        Where to excise the matter.  "lapse" excises where alpha < excision_lapse
+        and "radius" where r < excision_radius, the latter being a sphere fixed
+        at the origin and therefore only usable for a hole that does not move.
+
+        "horizon" excises inside the apparent horizons the AH finder has
+        located, following them as they move and grow.  It is *additive* to the
+        lapse test rather than a replacement: before the first horizon is found
+        -- at startup, and throughout a binary inspiral before merger -- there
+        is nothing to excise inside, and a criterion that switched the lapse
+        test off would leave the run with no excision at all exactly where it
+        currently has some.  So "horizon" behaves identically to "lapse" until a
+        horizon exists, and is strictly more aggressive afterwards.  Requires
+        apparent_horizon.n_horizons > 0.
+
+        Note that GRACE excises *matter*, not the spacetime: excised points are
+        reset to atmosphere and the Z4c evolution is untouched, as moving-
+        puncture evolutions require.
+
+        One caveat follows from the union: "horizon" excises nothing at all
+        until a horizon is found *if the lapse test never fires either*.  In a
+        moving-puncture evolution the lapse does collapse and the fallback is
+        real, but on an analytic metric -- Cowling with Kerr-Schild, say --
+        alpha stays well above the default threshold everywhere, so before the
+        first find there is no excision.  Set excision_lapse to suit the gauge
+        actually being evolved.
+
+        The excised region is refreshed only when a horizon is searched for, so
+        apparent_horizon.find_every should be small when excising: a hole that
+        moves further than the (1 - excision_horizon_factor) margin between
+        finds could be excised outside its own surface.  The manager warns.
     excision_lapse:
       type: double 
       range: "(0,*)"
@@ -85,6 +114,23 @@ grmhd:
       default: 1.0
       description: >
         If excision criterion is radius, where to excise
+
+    excision_horizon_factor:
+      type: double
+      range: "(0,1]"
+      default: 0.8
+      description: >
+        Fraction of each horizon's *inscribed* radius to excise inside, when
+        excision_criterion is "horizon".
+
+        The inscribed radius is the smallest distance from the horizon centroid
+        to the surface, so a sphere of that radius lies entirely inside the
+        horizon however distorted it is; this factor then pulls the excision
+        boundary further in.  Keeping it strictly below 1 matters: the excised
+        region must stay inside the horizon so that nothing excised can
+        influence the exterior, and the surface itself is only located to the
+        accuracy of the grid.  Values near 1 are not more efficient, only less
+        safe.
 
   c2p:
     type: schema

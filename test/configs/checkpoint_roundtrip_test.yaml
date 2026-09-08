@@ -63,7 +63,7 @@ checkpoints: {
   iteration_interval: 1000000,        # don't auto-write during evolution
   checkpoint_at_startup: false,
   checkpoint_at_termination: false,
-  max_n_checkpoints: 3
+  max_n_checkpoints: 10
 }
 
 evolution: {
@@ -105,4 +105,28 @@ eos: {
     kappa_id: 100.0
   },
   eps_maximum: 1.0e+05
+}
+
+# One horizon, purely so the checkpoint carries apparent-horizon state. The
+# test sets that state by hand and checks it survives the round-trip; no search
+# is run (find_every: -1), and this TOV data has no horizon to find anyway.
+apparent_horizon: {
+  n_horizons: 1,
+  find_every: -1,
+  verbose: false,
+  output_shape: false,
+  horizons: [
+    {
+      name: "AH",
+      l_max: 4,
+      initial_radius: 1.5,
+      center_x: 0.0, center_y: 0.0, center_z: 0.0,
+      tolerance: 1.0e-4,
+      max_iterations: 20,
+      max_relative_step: 0.1,
+      track_center: false,
+      find_every: -1,
+      enabled: true
+    }
+  ]
 }

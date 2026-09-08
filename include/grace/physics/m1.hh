@@ -302,8 +302,11 @@ struct m1_equations_system_t
         using namespace grace ;
         using namespace Kokkos ; 
 
-        double rtp[3] ; 
-        coords.get_physical_coordinates_sph(i,j,k,q,rtp) ; 
+        double m1_ccoords[3] = {0.5,0.5,0.5} ;
+        double xyz[3] ;
+        coords.get_physical_coordinates(i,j,k,q,m1_ccoords,xyz,1) ;
+        double rtp[3] ;
+        coords.cart_to_sph(xyz,rtp) ; 
 
 
         m1_prims_array_t prims ; 
@@ -336,6 +339,8 @@ struct m1_equations_system_t
         bool excise = excision_params.excise_by_radius 
                 ? r <= excision_params.r_ex 
                 : metric.alp() <= excision_params.alp_ex ; 
+        if (excision_params.excise_by_horizon && excision_params.inside_horizon(xyz))
+            excise = true ; 
         double E_atmo = atmo_params.E_fl * Kokkos::pow(r,atmo_params.E_fl_scaling) ; 
         double eps_atmo = atmo_params.eps_fl * Kokkos::pow(r,atmo_params.eps_fl_scaling) ; 
         if ( cl.E < E_atmo * (1. + 1.e-3 ) ) 

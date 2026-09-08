@@ -100,6 +100,7 @@ if(GRACE_USE_BUNDLED_DEPS)
 endif()
 
 include(setup_mpi)
+include(setup_openmp)
 find_package(OpenMP REQUIRED)
 include(setup_p4est)
 # P4_TO_P8 is added HERE, AFTER the (potentially-bundled) p4est subdirectory

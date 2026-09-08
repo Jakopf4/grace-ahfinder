@@ -1,0 +1,42 @@
+# Schwarzschild in Cartesian Kerr-Schild coordinates (M = 1, a = 0).
+#
+# `minkowski_vacuum` initial data fills the ADM variables from
+# kerr_schild_adm_metric when coordinate_system.is_kerr_schild is set, so this
+# gives a grid carrying an analytically-known geometry -- the reference the
+# end-to-end sampling test compares against.
+#
+# Kerr-Schild is horizon-penetrating and regular everywhere except r = 0, so
+# no excision is needed.
+name: "grace"
+amr: {
+  npoints_block_x: 16,
+  npoints_block_y: 16,
+  npoints_block_z: 16,
+  xmin: -16,
+  xmax: 16,
+  ymin: -16,
+  ymax: 16,
+  zmin: -16,
+  zmax: 16,
+  n_ghostzones: 2,
+  initial_refinement_level: 2,
+  regrid_every: -1,
+  regrid_at_postinitial: false
+}
+coordinate_system: {
+  is_kerr_schild: true,
+  bh_spin: 0.0
+}
+grmhd: {
+  id_type: "minkowski_vacuum"
+}
+IO: {
+  info_output_every: 0
+}
+system: {
+  console_log_level: "warn",
+  n_device_streams: 3
+}
+checkpoints: {
+  checkpoint_at_termination: false
+}

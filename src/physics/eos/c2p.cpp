@@ -195,6 +195,7 @@ conservs_to_prims(  grace::grmhd_cons_array_t&  cons
                   , excision_params_t const& excision
                   , c2p_params_t const& c2p_pars
                   , double * rtp
+                  , double const * xyz
                   , c2p_err_t& c2p_err
                   , bool dry_run 
                   , bool clamp_to_atmo )
@@ -356,10 +357,17 @@ conservs_to_prims(  grace::grmhd_cons_array_t&  cons
         c2p_failed = true ;
     }
 
-    // excision criterion 
+    // Excision criterion.
+    //
+    // The horizon test is a union with the lapse test, never a replacement:
+    // there is nothing inside a horizon that has not been found yet, and a run
+    // that switched the lapse test off would lose the excision it has today
+    // during an entire inspiral. inside_horizon() is a no-op returning false
+    // whenever no horizon has been published.
     bool excise = excision.excise_by_radius     
                 ? rtp[0] <= excision.r_ex 
-                : metric.alp() <= excision.alp_ex ; 
+                : metric.alp() <= excision.alp_ex ;
+    if (excision.excise_by_horizon && excision.inside_horizon(xyz)) excise = true ;
     if ((prims[RHOL] < (1.+atmo.atmo_tol) * atmo.rho_fl) or c2p_failed or excise ) {
         // reset everything to atmosphere
         reset_to_atmosphere(
@@ -478,6 +486,7 @@ conservs_to_prims<EOS>( grace::grmhd_cons_array_t&  \
                       , excision_params_t const& excision \
                       , c2p_params_t const& c2p_pars \
                       , double * rtp \
+                      , double const * xyz \
                       , c2p_err_t& c2p_err \
                       , bool dry_run \
                       , bool clamp_to_atmo )

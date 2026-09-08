@@ -56,7 +56,11 @@ make_surface(
 ) 
 {
     if ( sampling == "uniform" ) {
-        if ( tracking == "none") {
+        if ( tracking == "apparent_horizon") {
+            return std::make_unique<spherical_surface_t<uniform_sampler_t,ah_tracking_policy_t>>(
+                spherical_surface_t<uniform_sampler_t,ah_tracking_policy_t>(name,r,c,res)
+            ) ;
+        } else if ( tracking == "none") {
             return std::make_unique<spherical_surface_t<uniform_sampler_t,no_tracking_policy_t>>(
                 spherical_surface_t<uniform_sampler_t,no_tracking_policy_t>(name,r,c,res)
             );

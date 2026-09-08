@@ -611,14 +611,17 @@ void flag_fofc_cells(
         metric_array_t metric ;
         FILL_METRIC_ARRAY(metric, old_state, q, VEC(i,j,k)) ;
 
+        double ccoords[3] = {0.5,0.5,0.5} ;
+        double xyz[3] ;
+        dcoords.get_physical_coordinates(i,j,k,q,ccoords,xyz,1) ;
         double rtp[3] ;
-        dcoords.get_physical_coordinates_sph(i,j,k,q,rtp) ;
+        dcoords.cart_to_sph(xyz,rtp) ;
 
         grmhd_prims_array_t prims{} ;
         c2p_err_t c2p_errors ;
         bool const floored = conservs_to_prims<eos_t>(
             cons, prims, metric, eos,
-            atmo, excision, c2p_pars, rtp,
+            atmo, excision, c2p_pars, rtp, xyz,
             c2p_errors, true /* dry run */) ;
         /************************************************************************************/
         if (floored || dmp_violated) {

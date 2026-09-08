@@ -96,6 +96,10 @@ add_grace_test(checkpoint_roundtrip_test test_checkpoint_roundtrip.cpp)
 add_grace_test(test_sph_int test_spherical_surface.cpp)
 add_grace_test(interp_on_sphere_test test_interpolation_on_sphere.cpp)
 add_grace_test(grid_interpolator_test test_grid_interpolator.cpp)
+add_grace_test(point_cloud_sampler_test test_point_cloud_sampler.cpp)
+add_grace_test(kerr_schild_sampling_test test_kerr_schild_sampling.cpp)
+add_grace_test(horizon_on_grid_test test_horizon_on_grid.cpp)
+add_grace_test(horizon_manager_test test_horizon_manager.cpp)
 
 if(GRACE_METRIC_EVOL STREQUAL "Z4")
     add_grace_test(adm_integrals_test test_adm_integrals.cpp)
@@ -128,6 +132,33 @@ add_standalone_test(hermite_polynomial_test test_hermite_polynomial.cpp)
 
 add_standalone_test(hermite_interp_test test_hermite_interp.cpp)
 
+add_standalone_test(spherical_harmonics_test test_spherical_harmonics.cpp)
+
+add_standalone_test(dense_solve_test test_dense_solve.cpp)
+
+add_kokkos_test(adm_from_evolution_test test_adm_from_evolution.cpp)
+add_kokkos_test(strahlkoerper_test test_strahlkoerper.cpp)
+add_kokkos_test(expansion_test test_expansion.cpp)
+add_kokkos_test(horizon_finder_test test_horizon_finder.cpp)
+add_kokkos_test(horizon_fluxes_test test_horizon_fluxes.cpp)
+add_kokkos_test(horizon_spin_test test_horizon_spin.cpp)
+add_kokkos_test(surface_geometry_test test_surface_geometry.cpp)
+add_kokkos_test(killing_vector_test test_killing_vector.cpp)
+add_kokkos_test(horizon_multipoles_test test_horizon_multipoles.cpp)
+add_kokkos_test(common_horizon_test test_common_horizon.cpp)
+add_test(NAME common_horizon_test COMMAND mpirun -n 1 ./common_horizon_test)
+add_test(NAME horizon_multipoles_test COMMAND mpirun -n 1 ./horizon_multipoles_test)
+add_test(NAME killing_vector_test COMMAND mpirun -n 1 ./killing_vector_test)
+add_test(NAME surface_geometry_test COMMAND mpirun -n 1 ./surface_geometry_test)
+add_test(NAME horizon_spin_test COMMAND mpirun -n 1 ./horizon_spin_test)
+add_test(NAME horizon_finder_test COMMAND mpirun -n 1 ./horizon_finder_test)
+add_test(NAME horizon_fluxes_test COMMAND mpirun -n 1 ./horizon_fluxes_test)
+add_test(NAME expansion_test COMMAND mpirun -n 1 ./expansion_test)
+add_kokkos_test(surface_shape_output_test test_surface_shape_output.cpp)
+add_test(NAME surface_shape_output_test COMMAND mpirun -n 1 ./surface_shape_output_test)
+add_test(NAME strahlkoerper_test COMMAND mpirun -n 1 ./strahlkoerper_test)
+add_test(NAME adm_from_evolution_test COMMAND mpirun -n 1 ./adm_from_evolution_test)
+
 #
 # CTest registrations + labels
 # ----------------------------
@@ -158,6 +189,21 @@ add_test(NAME hermite_polynomial_test COMMAND ./hermite_polynomial_test)
 set_tests_properties(hermite_polynomial_test PROPERTIES LABELS "fast")
 add_test(NAME hermite_interp_test     COMMAND ./hermite_interp_test)
 set_tests_properties(hermite_interp_test     PROPERTIES LABELS "fast")
+add_test(NAME spherical_harmonics_test COMMAND ./spherical_harmonics_test)
+set_tests_properties(spherical_harmonics_test PROPERTIES LABELS "fast;physics")
+add_test(NAME dense_solve_test COMMAND ./dense_solve_test)
+set_tests_properties(dense_solve_test PROPERTIES LABELS "fast")
+set_tests_properties(adm_from_evolution_test PROPERTIES LABELS "fast;physics")
+set_tests_properties(strahlkoerper_test PROPERTIES LABELS "fast;physics")
+set_tests_properties(expansion_test PROPERTIES LABELS "fast;physics")
+set_tests_properties(horizon_finder_test PROPERTIES LABELS "fast;physics")
+set_tests_properties(horizon_fluxes_test PROPERTIES LABELS "fast;physics")
+set_tests_properties(horizon_spin_test PROPERTIES LABELS "fast;physics")
+set_tests_properties(surface_geometry_test PROPERTIES LABELS "fast;physics")
+set_tests_properties(killing_vector_test PROPERTIES LABELS "fast;physics")
+set_tests_properties(horizon_multipoles_test PROPERTIES LABELS "fast;physics")
+set_tests_properties(common_horizon_test PROPERTIES LABELS "fast;physics")
+set_tests_properties(surface_shape_output_test PROPERTIES LABELS "fast;io")
 
 # ----- Kokkos / codegen tests (no parfile) ---------------------------------
 # `add_kokkos_test` already registered these with the basic Kokkos main;
@@ -314,6 +360,40 @@ set_tests_properties(grmhd_kernels_test PROPERTIES LABELS "fast;physics")
 add_test(NAME grid_interpolator_test COMMAND
         mpirun -n 1 ./grid_interpolator_test --grace-parfile ./configs/basic_config.yaml )
 set_tests_properties(grid_interpolator_test PROPERTIES LABELS "fast")
+add_test(NAME point_cloud_sampler_test COMMAND
+        mpirun -n 1 ./point_cloud_sampler_test --grace-parfile ./configs/basic_config.yaml )
+set_tests_properties(point_cloud_sampler_test PROPERTIES LABELS "fast")
+add_test(NAME point_cloud_sampler_mpi_test COMMAND
+        mpirun -n 3 ./point_cloud_sampler_test --grace-parfile ./configs/basic_config.yaml )
+set_tests_properties(point_cloud_sampler_mpi_test PROPERTIES LABELS "mpi")
+add_test(NAME kerr_schild_sampling_test COMMAND
+        mpirun -n 1 ./kerr_schild_sampling_test --grace-parfile ./configs/kerr_schild_sampling.yaml )
+set_tests_properties(kerr_schild_sampling_test PROPERTIES LABELS "fast;physics")
+add_test(NAME kerr_schild_sampling_mpi_test COMMAND
+        mpirun -n 3 ./kerr_schild_sampling_test --grace-parfile ./configs/kerr_schild_sampling.yaml )
+set_tests_properties(kerr_schild_sampling_mpi_test PROPERTIES LABELS "mpi")
+add_test(NAME horizon_on_grid_test COMMAND
+        mpirun -n 1 ./horizon_on_grid_test --grace-parfile ./configs/kerr_schild_horizon.yaml )
+set_tests_properties(horizon_on_grid_test PROPERTIES LABELS "fast;physics")
+add_test(NAME horizon_on_grid_mpi_test COMMAND
+        mpirun -n 3 ./horizon_on_grid_test --grace-parfile ./configs/kerr_schild_horizon.yaml )
+set_tests_properties(horizon_on_grid_mpi_test PROPERTIES LABELS "mpi")
+# Same binary, same assertions, half the domain: z >= 0 with an equatorial
+# reflection symmetry, as the z4c examples and most production BBH runs are set
+# up.  The horizon straddles z = 0, so this is the end-to-end check that folding
+# the sampling back across the symmetry plane reproduces the full-domain answer.
+add_test(NAME horizon_on_grid_zsym_test COMMAND
+        mpirun -n 1 ./horizon_on_grid_test --grace-parfile ./configs/kerr_schild_horizon_zsym.yaml )
+set_tests_properties(horizon_on_grid_zsym_test PROPERTIES LABELS "fast;physics")
+add_test(NAME horizon_on_grid_zsym_mpi_test COMMAND
+        mpirun -n 3 ./horizon_on_grid_test --grace-parfile ./configs/kerr_schild_horizon_zsym.yaml )
+set_tests_properties(horizon_on_grid_zsym_mpi_test PROPERTIES LABELS "mpi")
+add_test(NAME horizon_manager_test COMMAND
+        mpirun -n 1 ./horizon_manager_test --grace-parfile ./configs/horizon_manager.yaml )
+set_tests_properties(horizon_manager_test PROPERTIES LABELS "fast;physics")
+add_test(NAME horizon_manager_mpi_test COMMAND
+        mpirun -n 3 ./horizon_manager_test --grace-parfile ./configs/horizon_manager.yaml )
+set_tests_properties(horizon_manager_mpi_test PROPERTIES LABELS "mpi")
 
 # ----- Spherical surfaces (single-rank, parfile) ---------------------------
 add_test(NAME test_sph_int COMMAND

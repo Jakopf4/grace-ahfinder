@@ -50,6 +50,7 @@
 #include <grace/amr/p4est_headers.hh>
 
 #include <grace/IO/diagnostics/co_tracker.hh>
+#include <grace/geometry/horizon_manager.hh>
 #include <grace/physics/b_field_injection.hh>
 #ifdef GRACE_ENABLE_PARTICLES
 #include <grace/particles/particles_module.hh>
@@ -596,6 +597,11 @@ void checkpoint_handler_impl_t::save_checkpoint()
         HDF5_CALL(err, H5Gclose(tracker_grp));
     }
 
+    // Apparent horizons go to their own small file beside this one, written
+    // after this parallel file is closed -- see save_horizon_checkpoint().
+    // The state is a few KB one wants to inspect and copy on its own, and this
+    // file runs to O(100 GB) in production.
+
     // persist mid-run B-field injection state
     {
         int has_fired = static_cast<int>(grace::b_field_injection_has_fired()) ;
@@ -640,9 +646,12 @@ void checkpoint_handler_impl_t::save_checkpoint()
     GRACE_TRACE("Done with write.") ; 
     /* Close the file */
     HDF5_CALL(err,H5Fclose(file_id)) ; 
-    HDF5_CALL(err,H5Pclose(plist_id)) ; 
-    GRACE_TRACE("Done with write.") ; 
-    // Append the checkpoint to the list 
+    HDF5_CALL(err,H5Pclose(plist_id)) ;
+    GRACE_TRACE("Done with write.") ;
+    // Apparent-horizon state, in its own file beside this one.  Written after
+    // the parallel file is closed so the two never contend, and by rank 0 only.
+    save_horizon_checkpoint(iter) ;
+    // Append the checkpoint to the list
     checkpoint_list.push_back(iter) ;
     if ( checkpoint_list.size() > max_n_checkpoints ) {
         delete_checkpoint() ;
@@ -718,6 +727,10 @@ void checkpoint_handler_impl_t::load_checkpoint(int64_t iter )
     grace::coordinate_system::initialize() ;
     grace::eos::initialize() ;
     grace::co_tracker::initialize() ;
+    // Horizons too: on a restart the else-branch in grace::initialize() that
+    // normally constructs these singletons never runs, so anything this
+    // function reads from must be brought up here.
+    grace::horizon_manager::initialize() ;
     /**********************************************************************/
     auto data_fname = detail::get_filename(checkpoint_dir, "checkpoint_data", iter, ".h5") ;
     /**********************************************************************/
@@ -898,6 +911,134 @@ void checkpoint_handler_impl_t::load_checkpoint(int64_t iter )
         HDF5_CALL(err, H5Gclose(tracker_grp));
     }
 
+    // Apparent horizons.  A checkpoint written with a different l_max is
+    // rejected per horizon by deserialize_horizon(), which re-seeds that
+    // horizon rather than misreading the buffer.
+    //
+    // Horizon state now lives in checkpoint_ah_<iter>.h5 beside this file.  The
+    // block below is the legacy path, kept so checkpoints written before that
+    // split still restart; it reads the group out of the file already open
+    // here, so restart still consults exactly one directory.
+    auto& ah_mgr = grace::horizon_manager::get() ;
+    if (ah_mgr.is_active() && !load_horizon_checkpoint(iter)) {
+        int const nah_exp = ah_mgr.n_horizons() ;
+        htri_t const has_ah = H5Lexists(file_id, "apparent_horizon", H5P_DEFAULT) ;
+        if (has_ah > 0) {
+            GRACE_WARN("No apparent-horizon sidecar for iteration {}; reading "
+                       "the horizon state stored inside the checkpoint itself. "
+                       "That is a pre-sidecar checkpoint -- the next one this "
+                       "run writes will use checkpoint_ah_{:06d}.h5.",
+                       iter, iter) ;
+        }
+        if (has_ah <= 0) {
+            // Either the checkpoint predates horizon support, or the earlier
+            // run simply had no horizons configured. Both are ordinary, and
+            // neither is a reason to refuse to restart: the stored state is
+            // only a warm start, worth a few Newton iterations once.
+            GRACE_WARN("Checkpoint contains no apparent-horizon state (written "
+                       "before horizons were enabled, or by an older version); "
+                       "horizons will start from their initial guesses.") ;
+        } else {
+            hid_t ah_grp;
+            HDF5_CALL(ah_grp, H5Gopen2(file_id, "apparent_horizon", H5P_DEFAULT));
+
+            int nah;
+            {
+                hid_t dset_id;
+                HDF5_CALL(dset_id, H5Dopen2(ah_grp, "n_horizons", H5P_DEFAULT));
+                HDF5_CALL(err, H5Dread(dset_id, H5T_NATIVE_INT, H5S_ALL, H5S_ALL, H5P_DEFAULT, &nah));
+                HDF5_CALL(err, H5Dclose(dset_id));
+            }
+            // Do not abort on a count mismatch. Adding or removing a horizon
+            // between runs is a normal thing to do -- enabling a common-horizon
+            // search partway through a binary, say -- and the stored state is
+            // only a warm start. Losing it costs a few extra Newton iterations
+            // on one step; refusing to restart costs the run.
+            if (nah != nah_exp) {
+                GRACE_WARN("Checkpoint holds {} apparent horizons but {} are "
+                           "configured; horizon shapes will not be restored and "
+                           "every horizon starts from its initial guess.",
+                           nah, nah_exp) ;
+                HDF5_CALL(err, H5Gclose(ah_grp));
+                nah = 0 ;
+            }
+
+            for (int iah = 0; iah < nah; ++iah) {
+                std::string const base = "horizon_" + std::to_string(iah) ;
+
+                std::vector<double> buf ;
+                {
+                    hid_t dset_id, space_id;
+                    HDF5_CALL(dset_id, H5Dopen2(ah_grp, base.c_str(), H5P_DEFAULT));
+                    HDF5_CALL(space_id, H5Dget_space(dset_id));
+                    hsize_t dims[1] ;
+                    H5Sget_simple_extent_dims(space_id, dims, nullptr) ;
+                    buf.resize(dims[0]) ;
+                    HDF5_CALL(err, H5Dread(dset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL,
+                                           H5P_DEFAULT, buf.data()));
+                    HDF5_CALL(err, H5Sclose(space_id));
+                    HDF5_CALL(err, H5Dclose(dset_id));
+                }
+                int found = 0 ;
+                {
+                    std::string const fname = base + "_found" ;
+                    hid_t dset_id;
+                    HDF5_CALL(dset_id, H5Dopen2(ah_grp, fname.c_str(), H5P_DEFAULT));
+                    HDF5_CALL(err, H5Dread(dset_id, H5T_NATIVE_INT, H5S_ALL, H5S_ALL,
+                                           H5P_DEFAULT, &found));
+                    HDF5_CALL(err, H5Dclose(dset_id));
+                }
+                ah_mgr.deserialize_horizon(iah, buf, found != 0) ;
+
+                // Optional, like the state array below: a checkpoint written
+                // before this field existed simply restores without it, and
+                // deserialize_last_good() is length-tolerant so a shorter
+                // record loads with the missing entries defaulted.
+                std::string const lname = base + "_last_good" ;
+                if (H5Lexists(ah_grp, lname.c_str(), H5P_DEFAULT) > 0) {
+                    std::vector<double> lg ;
+                    hid_t dset_id, lspace;
+                    HDF5_CALL(dset_id, H5Dopen2(ah_grp, lname.c_str(), H5P_DEFAULT));
+                    HDF5_CALL(lspace, H5Dget_space(dset_id));
+                    hsize_t ldims[1] = {0} ;
+                    H5Sget_simple_extent_dims(lspace, ldims, nullptr) ;
+                    lg.resize(ldims[0]) ;
+                    HDF5_CALL(err, H5Dread(dset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL,
+                                           H5P_DEFAULT, lg.data()));
+                    HDF5_CALL(err, H5Sclose(lspace));
+                    HDF5_CALL(err, H5Dclose(dset_id));
+                    ah_mgr.deserialize_last_good(iah, lg) ;
+                }
+
+                // State is optional: a checkpoint written before common-horizon
+                // support has no such dataset, and those runs had no common
+                // horizons to restore.
+                std::string const sname = base + "_state" ;
+                if (H5Lexists(ah_grp, sname.c_str(), H5P_DEFAULT) > 0) {
+                    int sc[3] = {0, 0, 0} ;
+                    hid_t dset_id, sspace;
+                    HDF5_CALL(dset_id, H5Dopen2(ah_grp, sname.c_str(), H5P_DEFAULT));
+                    HDF5_CALL(sspace, H5Dget_space(dset_id));
+                    hsize_t sdims[1] = {0} ;
+                    H5Sget_simple_extent_dims(sspace, sdims, nullptr) ;
+                    HDF5_CALL(err, H5Sclose(sspace));
+                    // Older checkpoints stored only (state, failures); read what
+                    // is there and let has_existed fall back to the state.
+                    HDF5_CALL(err, H5Dread(dset_id, H5T_NATIVE_INT, H5S_ALL, H5S_ALL,
+                                           H5P_DEFAULT, sc));
+                    HDF5_CALL(err, H5Dclose(dset_id));
+                    if (sdims[0] < 3) {
+                        sc[2] = (sc[0] == static_cast<int>(horizon_state_t::found)
+                              || sc[0] == static_cast<int>(horizon_state_t::abandoned))
+                              ? 1 : 0 ;
+                    }
+                    ah_mgr.set_horizon_state(iah, sc[0], sc[1], sc[2]) ;
+                }
+            }
+            if (nah > 0) { HDF5_CALL(err, H5Gclose(ah_grp)); }
+        }
+    }
+
     // if present, load mid-run B-field injection state
     {
         htri_t exists = H5Lexists(file_id, "b_field_injection", H5P_DEFAULT) ;
@@ -959,16 +1100,262 @@ void checkpoint_handler_impl_t::load_checkpoint(int64_t iter )
     GRACE_PROFILING_POP_REGION ; 
 }
 
-void checkpoint_handler_impl_t::delete_checkpoint() 
+//---------------------------------------------------------------------------
+// Apparent-horizon sidecar
+//
+// Kept out of the main checkpoint file because that file is O(100 GB) in
+// production while this is a few KB, and horizon state is exactly the thing one
+// wants to inspect, copy and diff on its own.  Losing it costs a warm start and
+// nothing else, so nothing here is ever required for a restart to succeed.
+//---------------------------------------------------------------------------
+
+void checkpoint_handler_impl_t::save_horizon_checkpoint(int64_t iter) const
+{
+    auto& ah_mgr = grace::horizon_manager::get() ;
+    if (!ah_mgr.is_active()) return ;
+    // Horizon state is bit-identical on every rank (pinned by
+    // horizon_manager_mpi_test), so there is nothing to gather: rank 0 writes
+    // serially and every rank reads the result back independently.
+    if (parallel::mpi_comm_rank() != 0) return ;
+
+    auto const path = detail::get_filename(checkpoint_dir, "checkpoint_ah", iter, ".h5") ;
+
+    herr_t err ;
+    hid_t  file_id ;
+    HDF5_CALL(file_id, H5Fcreate(path.string().c_str(), H5F_ACC_TRUNC,
+                                 H5P_DEFAULT, H5P_DEFAULT)) ;
+
+    int const nah = ah_mgr.n_horizons() ;
+
+    auto write_scalar_int = [&](hid_t where, char const* name, int value) {
+        hid_t space_id, dset_id ;
+        HDF5_CALL(space_id, H5Screate(H5S_SCALAR)) ;
+        HDF5_CALL(dset_id, H5Dcreate2(where, name, H5T_NATIVE_INT, space_id,
+                                      H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT)) ;
+        HDF5_CALL(err, H5Dwrite(dset_id, H5T_NATIVE_INT, H5S_ALL, H5S_ALL,
+                                H5P_DEFAULT, &value)) ;
+        HDF5_CALL(err, H5Dclose(dset_id)) ;
+        HDF5_CALL(err, H5Sclose(space_id)) ;
+    } ;
+
+    // Provenance, so the file says what it is without the run beside it.  The
+    // iteration also records how stale the state is: a checkpoint that does not
+    // land on a multiple of find_every carries the previous find's result.
+    write_scalar_int(file_id, "iteration", static_cast<int>(iter)) ;
+    write_scalar_int(file_id, "n_horizons", nah) ;
+    {
+        double const t = grace::get_simulation_time() ;
+        hid_t space_id, dset_id ;
+        HDF5_CALL(space_id, H5Screate(H5S_SCALAR)) ;
+        HDF5_CALL(dset_id, H5Dcreate2(file_id, "time", H5T_NATIVE_DOUBLE, space_id,
+                                      H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT)) ;
+        HDF5_CALL(err, H5Dwrite(dset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL,
+                                H5P_DEFAULT, &t)) ;
+        HDF5_CALL(err, H5Dclose(dset_id)) ;
+        HDF5_CALL(err, H5Sclose(space_id)) ;
+    }
+
+    auto write_doubles = [&](char const* name, std::vector<double> const& v) {
+        hsize_t dims[1] = { static_cast<hsize_t>(v.size()) } ;
+        hid_t space_id, dset_id ;
+        HDF5_CALL(space_id, H5Screate_simple(1, dims, nullptr)) ;
+        HDF5_CALL(dset_id, H5Dcreate2(file_id, name, H5T_NATIVE_DOUBLE, space_id,
+                                      H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT)) ;
+        HDF5_CALL(err, H5Dwrite(dset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL,
+                                H5P_DEFAULT, v.data())) ;
+        return dset_id ;   // caller closes, after attaching attributes
+    } ;
+
+    for (int iah = 0; iah < nah; ++iah) {
+        std::string const base = "horizon_" + std::to_string(iah) ;
+
+        {
+            auto const buf = ah_mgr.serialize_horizon(iah) ;
+            hid_t dset_id = write_doubles(base.c_str(), buf) ;
+            // The name is what makes a restart able to tell one horizon from
+            // another.  Positional identity alone cannot: in a binary, AH1 and
+            // AH2 have the same l_max and the same initial radius, so a
+            // reordered horizons list would otherwise load each into the other
+            // with nothing to detect it.
+            grace::IO::write_dataset_string_attribute_hdf5(dset_id, "name",
+                                                           ah_mgr.get(iah).name) ;
+            HDF5_CALL(err, H5Dclose(dset_id)) ;
+        }
+        write_scalar_int(file_id, (base + "_found").c_str(),
+                         ah_mgr.horizon_ever_found(iah) ? 1 : 0) ;
+        {
+            auto const lg = ah_mgr.serialize_last_good(iah) ;
+            hid_t dset_id = write_doubles((base + "_last_good").c_str(), lg) ;
+            HDF5_CALL(err, H5Dclose(dset_id)) ;
+        }
+        {
+            int const sc[3] = { ah_mgr.horizon_state_code(iah),
+                                ah_mgr.horizon_failure_count(iah),
+                                ah_mgr.horizon_has_existed(iah) ? 1 : 0 } ;
+            hsize_t dims[1] = { 3 } ;
+            hid_t space_id, dset_id ;
+            HDF5_CALL(space_id, H5Screate_simple(1, dims, nullptr)) ;
+            HDF5_CALL(dset_id, H5Dcreate2(file_id, (base + "_state").c_str(),
+                                          H5T_NATIVE_INT, space_id,
+                                          H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT)) ;
+            HDF5_CALL(err, H5Dwrite(dset_id, H5T_NATIVE_INT, H5S_ALL, H5S_ALL,
+                                    H5P_DEFAULT, sc)) ;
+            HDF5_CALL(err, H5Dclose(dset_id)) ;
+            HDF5_CALL(err, H5Sclose(space_id)) ;
+        }
+    }
+
+    HDF5_CALL(err, H5Fclose(file_id)) ;
+    GRACE_VERBOSE("Wrote apparent-horizon checkpoint {}", path.string()) ;
+}
+
+bool checkpoint_handler_impl_t::load_horizon_checkpoint(int64_t iter) const
+{
+    auto& ah_mgr = grace::horizon_manager::get() ;
+    if (!ah_mgr.is_active()) return false ;
+
+    auto const path = detail::get_filename(checkpoint_dir, "checkpoint_ah", iter, ".h5") ;
+    if (!std::filesystem::exists(path)) return false ;
+
+    // Every rank opens it read-only and serially, as the EOS table reader
+    // already does: the payload is small and identical for all of them.
+    herr_t err ;
+    hid_t  file_id ;
+    HDF5_CALL(file_id, H5Fopen(path.string().c_str(), H5F_ACC_RDONLY, H5P_DEFAULT)) ;
+
+    int nah = 0 ;
+    {
+        hid_t dset_id ;
+        HDF5_CALL(dset_id, H5Dopen2(file_id, "n_horizons", H5P_DEFAULT)) ;
+        HDF5_CALL(err, H5Dread(dset_id, H5T_NATIVE_INT, H5S_ALL, H5S_ALL,
+                               H5P_DEFAULT, &nah)) ;
+        HDF5_CALL(err, H5Dclose(dset_id)) ;
+    }
+
+    int const nah_exp = ah_mgr.n_horizons() ;
+    if (nah != nah_exp) {
+        // Same reasoning as the count check has always used: adding or removing
+        // a horizon between runs is a normal thing to do, and the stored state
+        // is only a warm start.  Refusing to restart would cost the run.
+        GRACE_WARN("Apparent-horizon checkpoint holds {} horizons but {} are "
+                   "configured; every horizon starts from its initial guess.",
+                   nah, nah_exp) ;
+        HDF5_CALL(err, H5Fclose(file_id)) ;
+        return true ;
+    }
+
+    auto read_doubles = [&](std::string const& name, std::vector<double>& out) {
+        hid_t dset_id, space_id ;
+        HDF5_CALL(dset_id, H5Dopen2(file_id, name.c_str(), H5P_DEFAULT)) ;
+        HDF5_CALL(space_id, H5Dget_space(dset_id)) ;
+        hsize_t dims[1] = {0} ;
+        H5Sget_simple_extent_dims(space_id, dims, nullptr) ;
+        out.resize(dims[0]) ;
+        HDF5_CALL(err, H5Dread(dset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL,
+                               H5P_DEFAULT, out.data())) ;
+        HDF5_CALL(err, H5Sclose(space_id)) ;
+        return dset_id ;   // caller closes, after reading attributes
+    } ;
+
+    for (int iah = 0; iah < nah; ++iah) {
+        std::string const base = "horizon_" + std::to_string(iah) ;
+
+        std::vector<double> buf ;
+        hid_t dset_id = read_doubles(base, buf) ;
+
+        // Identity check.  On a mismatch this horizon keeps its configured
+        // guess rather than inheriting another horizon's shape and centre --
+        // the failure that positional identity alone could not see.
+        std::string stored_name ;
+        if (H5Aexists(dset_id, "name") > 0) {
+            hid_t attr_id, atype ;
+            HDF5_CALL(attr_id, H5Aopen(dset_id, "name", H5P_DEFAULT)) ;
+            HDF5_CALL(atype, H5Aget_type(attr_id)) ;
+            // write_dataset_string_attribute_hdf5() writes a *variable-length*
+            // string, and for those H5Tget_size reports the size of a pointer
+            // rather than of the text.  Reading one as fixed-length yields the
+            // pointer's bytes as characters, which then fails the comparison
+            // below and silently skips the restore.  Handle both encodings.
+            if (H5Tis_variable_str(atype) > 0) {
+                char* s = nullptr ;
+                HDF5_CALL(err, H5Aread(attr_id, atype, &s)) ;
+                if (s) { stored_name = s ; H5free_memory(s) ; }
+            } else {
+                std::string raw(H5Tget_size(atype), '\0') ;
+                HDF5_CALL(err, H5Aread(attr_id, atype, raw.data())) ;
+                raw.erase(raw.find_last_not_of('\0') + 1) ;
+                stored_name = raw ;
+            }
+            HDF5_CALL(err, H5Tclose(atype)) ;
+            HDF5_CALL(err, H5Aclose(attr_id)) ;
+        }
+        HDF5_CALL(err, H5Dclose(dset_id)) ;
+
+        std::string const& want = ah_mgr.get(iah).name ;
+        if (!stored_name.empty() && stored_name != want) {
+            GRACE_WARN("Apparent-horizon checkpoint slot {} holds '{}' but '{}' "
+                       "is configured there; '{}' starts from its initial guess "
+                       "rather than inheriting another horizon's shape.",
+                       iah, stored_name, want, want) ;
+            continue ;
+        }
+
+        int found = 0 ;
+        {
+            hid_t d ;
+            HDF5_CALL(d, H5Dopen2(file_id, (base + "_found").c_str(), H5P_DEFAULT)) ;
+            HDF5_CALL(err, H5Dread(d, H5T_NATIVE_INT, H5S_ALL, H5S_ALL,
+                                   H5P_DEFAULT, &found)) ;
+            HDF5_CALL(err, H5Dclose(d)) ;
+        }
+        if (!ah_mgr.deserialize_horizon(iah, buf, found != 0)) {
+            GRACE_WARN("Apparent horizon '{}' was checkpointed at a different "
+                       "l_max; it starts from its initial guess.", want) ;
+            continue ;
+        }
+
+        {
+            std::vector<double> lg ;
+            hid_t d = read_doubles(base + "_last_good", lg) ;
+            HDF5_CALL(err, H5Dclose(d)) ;
+            ah_mgr.deserialize_last_good(iah, lg) ;
+        }
+        {
+            int sc[3] = {0, 0, 0} ;
+            hid_t d, sspace ;
+            HDF5_CALL(d, H5Dopen2(file_id, (base + "_state").c_str(), H5P_DEFAULT)) ;
+            HDF5_CALL(sspace, H5Dget_space(d)) ;
+            HDF5_CALL(err, H5Sclose(sspace)) ;
+            HDF5_CALL(err, H5Dread(d, H5T_NATIVE_INT, H5S_ALL, H5S_ALL,
+                                   H5P_DEFAULT, sc)) ;
+            HDF5_CALL(err, H5Dclose(d)) ;
+            ah_mgr.set_horizon_state(iah, sc[0], sc[1], sc[2]) ;
+        }
+    }
+
+    HDF5_CALL(err, H5Fclose(file_id)) ;
+    GRACE_INFO("Restored apparent-horizon state from {}", path.string()) ;
+    return true ;
+}
+
+void checkpoint_handler_impl_t::delete_checkpoint()
 {
     auto iter = checkpoint_list.front() ; 
     GRACE_VERBOSE("Deleting checkpoint at iter {}",iter ) ; 
     // first the forest file 
     auto fname = detail::get_filename(checkpoint_dir, "checkpoint_grid", iter, ".bin") ;
     std::filesystem::remove(fname) ;
-    // then the data 
+    // then the data
     auto data_fname = detail::get_filename(checkpoint_dir, "checkpoint_data", iter, ".h5") ;
     std::filesystem::remove(data_fname) ;
+    // and the apparent-horizon sidecar, which need not exist: checkpoints
+    // written before it, or by a run with no horizons, have none.  The
+    // error_code overload keeps that from being an error.
+    {
+        auto ah_fname = detail::get_filename(checkpoint_dir, "checkpoint_ah", iter, ".h5") ;
+        std::error_code ec ;
+        std::filesystem::remove(ah_fname, ec) ;
+    }
     // remove from the list
     checkpoint_list.pop_front() ;
 }

@@ -1,0 +1,323 @@
+apparent_horizon:
+  type: schema
+  description: >
+    Apparent horizon finder.  The surface is a Strahlkoerper r = h(theta,phi)
+    expanded in real spherical harmonics; the finder solves Theta[h] = 0 for
+    the expansion of the outgoing null normal by Newton iteration.
+
+    Horizons are searched for independently of one another; there is no
+    common-envelope search and no ordering between them.  With n_horizons = 0
+    (the default) the finder is inactive and costs nothing.
+
+  n_horizons:
+    type: int
+    range: "[0,*)"
+    default: 0
+    description: >
+      Number of apparent horizons to search for.  Zero disables the finder.
+
+  find_every:
+    type: int
+    range: "[-1,*)"
+    default: -1
+    description: >
+      Default search cadence, in iterations, for horizons that do not override
+      it.  Deliberately separate from IO.diagnostic_output_every: a horizon that
+      is tracked or used to steer refinement generally needs to be located more
+      often than diagnostics are written.  Set to -1 to disable.
+
+  verbose:
+    type: bool
+    default: false
+    description: >
+      Print the residual norm at each Newton iteration.
+
+  output_shape:
+    type: bool
+    default: true
+    description: >
+      Write the full surface shape (spectral coefficients plus sampled points)
+      each time a horizon is found, in addition to the scalar time series.
+
+  compute_fluxes:
+    type: bool
+    default: false
+    description: >
+      Integrate the rest-mass, energy, angular-momentum and magnetic fluxes
+      over each horizon once it has been found, and write them as the last five
+      series columns (mdot, edot, ldot, phi_B, phi_B_signed).
+
+      The integrands are the same ones bh_diagnostics evaluates on a coordinate
+      sphere; what differs is that they are taken here on the horizon itself,
+      with its own unit normal and proper area element, rather than on an
+      r = const sphere with a radial normal.
+
+      mdot is positive for inflow, so an accreting hole reports a positive
+      accretion rate.  phi_B is the (1/2)|b^n u^t - b^t u^n| form used for
+      Blandford-Znajek, i.e. half the absolute flux.  phi_B_signed is the plain
+      integral of B^i s_i, which vanishes identically by div B = 0 and is kept
+      as a live check on the divergence constraint and on the interpolation onto
+      the surface -- if it drifts away from zero, distrust phi_B on that step.
+
+      Off by default: a vacuum run has nothing to integrate, and this costs two
+      extra collective samples per find.  Setting it is an assertion that the
+      hydro variables are live.
+
+  shape_format:
+    type: keyword
+    allowed: ["hdf5","ascii","both"]
+    default: "hdf5"
+    description: >
+      Format for the surface files written when output_shape is set.
+
+      "hdf5" writes one self-contained file per horizon per output: the spectral
+      coefficients (so the surface can be resampled at any resolution), the
+      collocation grid and its Cartesian points, every per-point diagnostic
+      field the solve produced -- expansion, intrinsic curvature, shear, the
+      invariant coordinate -- the full multipole spectrum, and the scalar row
+      carrying its own column names.  It is data, not a mesh: no connectivity
+      and no sidecar, since GRACEPy owns the visualisation.
+
+      "ascii" writes the older gnuplot-shaped text file instead, and "both"
+      writes each.
+
+  shape_output_every:
+    type: int
+    range: "[-1,*)"
+    default: -1
+    description: >
+      Iterations between surface files.  -1 writes one on every successful
+      find, which is what happened before this knob existed and is one file per
+      step at find_every 1.  The search and the surface output rarely want the
+      same cadence: a run can usefully search every step and keep a surface
+      every hundredth.
+
+  predict_origin_movement:
+    type: bool
+    default: false
+    description: >
+      Extrapolate each horizon's origin one find-interval forward before
+      searching, from the last two located centroids.
+
+      A warm start is only worth anything if the surface still sits near the
+      horizon, and for a hole moving a good fraction of its own radius between
+      finds it does not.  The prediction is skipped whenever the last
+      displacement exceeds half the horizon's inscribed radius, since that is a
+      jump -- a regrid, a re-seed, or a bad find -- rather than motion, and
+      following it would throw the surface off the hole.
+
+      Off by default, as it is in AHFinderDirect: a bad prediction costs
+      iterations rather than saving them.  Turn it on for a binary whose holes
+      move appreciably between finds.
+
+      Note this affects only where the *search* starts.  The excised region is
+      never predicted forward -- see excision_horizon_factor.
+
+  monitor_constraints:
+    type: bool
+    default: true
+    description: >
+      Report the area-averaged L2 norm of the Hamiltonian and momentum
+      constraint violation *on the horizon surface* (columns ham_norm and
+      mom_norm).  Z4 evolution only; both read zero otherwise.
+
+      This is the answer to the question every other column raises -- whether
+      the data the horizon sits in can be trusted.  A global constraint norm
+      cannot answer it, being dominated by the puncture and the outer boundary
+      rather than by the horizon.
+
+      On by default because it is very nearly free: z4c_H and z4c_M are refilled
+      once per RK step regardless, by compute_constraint_violations_fast(), so
+      this adds one small collective sample per find and no grid work at all.
+
+  horizons:
+    type: list
+    item_type: node
+    min_items: 0
+    description: >
+      Per-horizon configuration.  Each entry is searched independently.
+
+    item_schema:
+      name:
+        type: string
+        default: "AH0"
+        description: >
+          Unique name for this horizon; used in output filenames.
+
+      l_max:
+        type: int
+        range: "[1,20]"
+        default: 8
+        description: >
+          Highest retained spherical-harmonic degree.  The surface carries
+          (l_max+1)^2 coefficients on an (l_max+1) x (2*l_max+1) Gauss-Legendre
+          collocation grid.  Cost grows steeply: the Newton system is dense and
+          (l_max+1)^2 on a side, and the quasi-local Killing-vector eigensolve
+          is O(l_max^6) -- 3.5 ms at l_max = 8, 21 ms at l_max = 12, and the
+          dominant cost of a find by l_max = 16, where the manager warns.
+          Raise this only for genuinely distorted horizons.
+
+      initial_radius:
+        type: double
+        range: "(0,*)"
+        default: 1.0
+        description: >
+          Radius of the coordinate sphere used as the initial guess, in
+          coordinate units.  Ignored once a horizon has been found: subsequent
+          searches start from the previous shape, which is also what gets
+          checkpointed.
+
+      center_x:
+        type: double
+        range: "(*,*)"
+        default: 0.0
+        description: >
+          Initial x coordinate of the surface origin.  The horizon must be a
+          Strahlkoerper about this point, i.e. single-valued in r as seen from
+          it, so it should sit reasonably near the centre of the hole.
+
+      center_y:
+        type: double
+        range: "(*,*)"
+        default: 0.0
+        description: >
+          Initial y coordinate of the surface origin.
+
+      center_z:
+        type: double
+        range: "(*,*)"
+        default: 0.0
+        description: >
+          Initial z coordinate of the surface origin.
+
+      tolerance:
+        type: double
+        range: "(0,*)"
+        default: 1.0e-10
+        description: >
+          Convergence threshold on the norm of the expansion residual.
+
+      max_iterations:
+        type: int
+        range: "[1,*)"
+        default: 50
+        description: >
+          Maximum Newton iterations per search before giving up.
+
+      max_relative_step:
+        type: double
+        range: "(0,*)"
+        default: 0.1
+        description: >
+          Cap on a single Newton step, as a fraction of the mean surface
+          radius.  Without a cap an early iteration on a poor guess can throw
+          the surface outside the grid; AHFinderDirect applies the same limit
+          for the same reason.
+
+      track_center:
+        type: bool
+        default: true
+        description: >
+          Move the surface origin to the centroid of the previously found
+          horizon, so the surface follows a moving black hole.
+
+      find_every:
+        type: int
+        range: "[-1,*)"
+        default: -1
+        description: >
+          Per-horizon search cadence.  -1 means inherit the module-level
+          find_every.  Useful when one horizon is cheap and needed often (a
+          tracked puncture) while another is expensive and only wanted
+          occasionally.
+
+      enabled:
+        type: bool
+        default: true
+        description: >
+          Set false to keep a horizon's configuration in the parfile without
+          searching for it.
+
+      role:
+        type: keyword
+        allowed: ["individual", "common"]
+        default: "individual"
+        description: >
+          "individual" is an ordinary horizon, searched for from the start.
+          "common" is the horizon that forms around a binary at merger: it stays
+          dormant, costing nothing, until its two parents' surfaces actually
+          intersect, and is then seeded from them automatically.
+
+      parents:
+        type: list
+        item_type: string
+        min_items: 0
+        description: >
+          Names of the two individual horizons a common horizon forms around.
+          Required when role is "common", ignored otherwise.  Chains are not
+          supported: a common horizon may not itself be a parent.
+
+      trigger_separation_factor:
+        type: double
+        range: "(0,*)"
+        default: 2.5
+        description: >
+          Begin the common-horizon search when the parents' centre separation
+          falls below this multiple of the sum of their radii.  A common horizon
+          forms noticeably before the individual horizons touch -- on
+          Brill-Lindquist data two equal punctures acquire one while their
+          surfaces still have more than a horizon radius of gap between them --
+          so waiting for intersection would miss it.  The transition sits near
+          a factor of 2; the default is set above that because triggering early
+          costs only a few fast failed searches while triggering late loses the
+          horizon altogether.
+
+      parent_staleness_limit:
+        type: int
+        range: "[0,*)"
+        default: 0
+        description: >
+          How many iterations a parent's last *successful* result may be reused
+          for after the parent stops being findable, when triggering or seeding
+          this common horizon.  The individual horizons of a binary distort at
+          merger and are then at their least reliable, which is exactly when the
+          common horizon forms, so the trigger must not require both parents to
+          have succeeded on this very step.  This bounds how far back it may
+          reach: 0 means no limit.
+
+      overlap_margin:
+        type: double
+        range: "[0,*)"
+        default: 0.0
+        description: >
+          Fractional enlargement of the parent surfaces when testing whether
+          they intersect.  Intersection is the *second* trigger, independent of
+          trigger_separation_factor: it catches a tidally stretched pair whose
+          near tips meet while their centres are still far apart, which the
+          separation test -- which treats both surfaces as spheres -- would miss.
+
+      retry_every:
+        type: int
+        range: "[-1,*)"
+        default: -1
+        description: >
+          How often, in iterations, an abandoned horizon is looked for again.
+          -1 derives it as 20 times this horizon's own find_every; 0 makes
+          abandonment permanent.
+
+          Abandonment is a slow cadence, not a death sentence.  A few bad steps
+          through a merger, a regrid or a gauge transient must not lose a
+          horizon for the rest of the run, and a search for something that is
+          genuinely not there terminates in a handful of iterations through the
+          stall and runaway guards -- so the retry is cheap in exactly the case
+          it needs to be.  A successful retry restores the normal cadence.
+
+      stop_after_failures:
+        type: int
+        range: "[1,*)"
+        default: 5
+        description: >
+          Consecutive failures tolerated after a horizon has been found before
+          it is presumed gone and no longer searched for.  A horizon that has
+          never been found is exempt: it may simply not have formed yet, as in a
+          collapsing star or a merger that has not happened.

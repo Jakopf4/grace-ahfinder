@@ -17,7 +17,16 @@ int main( int argc, char* argv[] ) {
     std::stringstream ss;
     /* save old buffer and redirect output to string stream */
     auto cout_buf = std::cout.rdbuf( ss.rdbuf() ); 
-    int result = Catch::Session().run( argc, argv );
+    // Every rank must execute the same test cases in the same sequence:
+    // tests here perform MPI collectives, and Catch2's shuffled order is
+    // seeded from the clock, so two ranks can otherwise draw different
+    // orderings and mismatch inside MPI_Allreduce (MPI_ERR_TRUNCATE).
+    // Configuring the session directly also keeps GRACE's own CLI options
+    // (--grace-parfile ...) out of Catch2's argument parser.
+    Catch::Session session;
+    session.configData().runOrder = Catch::TestRunOrder::Declared;
+    session.configData().rngSeed  = 1;
+    int result = session.run();
     /* reset buffer */
     std::cout.rdbuf( cout_buf );
     std::stringstream print_rank;

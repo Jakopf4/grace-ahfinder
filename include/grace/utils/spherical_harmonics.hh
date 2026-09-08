@@ -163,6 +163,12 @@ public:
     const double* Y_matrix() const { return Y_.data(); }
     const double* dY_dth_matrix() const { return dY_dth_.data(); }
     const double* dY_dph_matrix() const { return dY_dph_.data(); }
+    /// Second-derivative matrices, same layout.  A Newton solve on a surface
+    /// needs these to turn per-point derivatives of a functional of h into
+    /// derivatives with respect to the coefficients.
+    const double* d2Y_dth2_matrix()   const { return d2Y_dth2_.data(); }
+    const double* d2Y_dthdph_matrix() const { return d2Y_dthdph_.data(); }
+    const double* d2Y_dph2_matrix()   const { return d2Y_dph2_.data(); }
 
 private:
     int l_max_, n_coeffs_, n_theta_, n_phi_, n_points_;

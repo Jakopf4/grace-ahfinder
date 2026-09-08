@@ -244,11 +244,48 @@ void regrid_transaction_t::prepare_device_side() {
                 iq_old++ ;
             }
         } else {
-            new_quad.set_min_level(min_levels[iq_old]) ; 
-            keep_incoming.push_back(iq_new++) ;  keep_outgoing.push_back(iq_old++) ; 
+            // iq_old is *derived* by walking the flags, never read from the
+            // forest, so a flag pattern that does not imply the exact 1:8 /
+            // 8:1 correspondence silently walks it past the end of the old
+            // grid.  min_levels is sized nq_init, so guard before indexing:
+            // this is the earliest point the drift is observable, and reading
+            // out of bounds here would otherwise return garbage and only
+            // surface later as an out-of-range quadrant id inside a device
+            // kernel.
+            ASSERT( iq_old < nq_init,
+                    "regrid bookkeeping desync while walking flags: iq_old="
+                    << iq_old << " has run past nq_init=" << nq_init
+                    << " (iq_new=" << iq_new << ", nq_regrid=" << nq_regrid
+                    << "). The flags no longer imply a consistent "
+                    << "parent/child mapping onto the pre-regrid grid." ) ;
+            new_quad.set_min_level(min_levels[iq_old]) ;
+            keep_incoming.push_back(iq_new++) ;  keep_outgoing.push_back(iq_old++) ;
         }
-        
+
     }
+    /******************************************************************************************/
+    /* The walk above consumes the old grid exactly once: every old quadrant is               */
+    /* either kept (1:1), prolonged (1 old -> P4EST_CHILDREN new) or restricted               */
+    /* (P4EST_CHILDREN old -> 1 new).  So on exit iq_old must land precisely on                */
+    /* nq_init.  If it does not, the *_outgoing lists hold indices that do not                */
+    /* address the pre-regrid state array, and the copy / restrict / prolong                   */
+    /* kernels will read outside it -- on a GPU that is a memory access fault                  */
+    /* with no usable backtrace, which is exactly how this manifests.                          */
+    /*                                                                                        */
+    /* Checked with a plain ASSERT rather than ASSERT_DBG on purpose: the                      */
+    /* failure only appears at higher rank counts (p4est_balance_ext runs after                */
+    /* coarsen and is non-local, so more rank boundaries mean more chances for                 */
+    /* the local quadrant composition to stop matching the flags), which means                 */
+    /* it needs to be live in the Release builds that production runs use.                      */
+    /* It is one host-side integer comparison per regrid.                                      */
+    /******************************************************************************************/
+    ASSERT( iq_old == nq_init,
+            "regrid bookkeeping desync: after walking all " << nq_regrid
+            << " post-regrid quadrants, iq_old=" << iq_old
+            << " but the pre-regrid grid had nq_init=" << nq_init
+            << " quadrants. Sizes: refine_outgoing=" << refine_outgoing.size()
+            << " coarsen_outgoing=" << coarsen_outgoing.size()
+            << " keep_outgoing=" << keep_outgoing.size() ) ;
     /******************************************************************************************/
     /*                       Resize variable arrays, we use state_p                           */
     /*                       as scratch space                                                 */

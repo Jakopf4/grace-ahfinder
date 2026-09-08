@@ -213,3 +213,97 @@ checkpoints: {
   max_n_checkpoints: 4,
   checkpoint_at_startup: true
 }
+
+# --- Apparent horizons ------------------------------------------------------
+#
+# Two individual horizons plus the common one that forms at merger.
+#
+# The punctures start at x = +/- par_b = +/- 3.257 and orbit in the xy plane, so
+# both individual surfaces have track_center on: the origin is moved to the
+# centroid after every find and the shape re-expressed about it, which keeps the
+# warm start alive as the holes move.  Without that the surface would be rigidly
+# translated and every find would start from scratch.
+#
+# The grid is equatorially symmetric (reflection_symmetries.z), so half of every
+# collocation-point set lies outside the computed domain.  The finder samples
+# the mirror points and carries the ADM tensors back across the plane by their
+# parity -- exact for a spacetime that has the symmetry, and nothing to
+# configure.
+#
+# Sizing: each puncture has M ~ 0.505, so its horizon sits near r ~ 0.25 at t = 0
+# and grows towards ~0.4 M as the slice relaxes.  The guesses start outside,
+# where the expansion is positive and the solve descends inwards.  The FMR floor
+# is dx = 0.125 but the conf_fact criterion refines further around the holes, to
+# dx = 0.03125 at max_refinement_level 10 -- about 8 cells per horizon radius.
+# If a run reports `stalled` with a large residual, that is the grid talking,
+# not the solver.
+#
+# AH_common stays dormant and costs only a trigger test until its parents come
+# close enough, then is seeded from them automatically -- centre on the
+# irreducible-mass-weighted midpoint, radius large enough to enclose both.  It
+# fires on proximity (a common horizon forms well before the individual surfaces
+# touch), on genuine intersection, or on both parents having existed and both
+# now failing, which is itself a merger signature.  parent_staleness_limit
+# bounds how far back a parent's last successful result may be reused for that,
+# in iterations -- a few times find_every.
+#
+# The individuals keep being searched after merger; they persist inside the
+# common horizon for a while and their areas stay meaningful.  Once one has been
+# found and then fails stop_after_failures times in a row it is presumed gone
+# and dropped, so a vanished horizon does not cost a search forever.
+apparent_horizon: {
+  n_horizons: 3,
+  find_every: 32,
+  verbose: true,
+  output_shape: false,
+
+  horizons: [
+    {
+      name: "AH1",
+      l_max: 8,
+      initial_radius: 0.5,
+      center_x: 3.257, center_y: 0.0, center_z: 0.0,
+      tolerance: 5.0e-4,
+      max_iterations: 40,
+      max_relative_step: 0.1,
+      track_center: true,
+      find_every: -1,
+      enabled: true
+    },
+    {
+      name: "AH2",
+      l_max: 8,
+      initial_radius: 0.5,
+      center_x: -3.257, center_y: 0.0, center_z: 0.0,
+      tolerance: 5.0e-4,
+      max_iterations: 40,
+      max_relative_step: 0.1,
+      track_center: true,
+      find_every: -1,
+      enabled: true
+    },
+    {
+      name: "AH_common",
+      role: "common",
+      parents: ["AH1", "AH2"],
+      # Higher l_max: the common horizon is strongly distorted when it first
+      # appears.  The Killing-vector eigensolve is O(l_max^6), ~8 ms here
+      # against ~3.5 ms at l_max 8, which is still small next to the sampling.
+      l_max: 10,
+      # Only used before the first trigger; once the parents are close it is
+      # re-seeded from them.
+      initial_radius: 2.0,
+      center_x: 0.0, center_y: 0.0, center_z: 0.0,
+      tolerance: 2.0e-4,
+      max_iterations: 40,
+      max_relative_step: 0.1,
+      track_center: true,
+      find_every: -1,
+      trigger_separation_factor: 2.5,
+      parent_staleness_limit: 128,
+      overlap_margin: 0.0,
+      stop_after_failures: 5,
+      enabled: true
+    }
+  ]
+}

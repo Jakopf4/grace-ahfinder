@@ -1,0 +1,145 @@
+# Schwarzschild in Cartesian Kerr-Schild coordinates, refined around the hole.
+#
+# The horizon sits at r = 2M, where the 1/r falloff is steep, so unlike the
+# sampling test (which probes r = 6..10 and is nearly flat there) this needs
+# real resolution.  A uniform grid fine enough would be far too large for a
+# fast test, so one fixed-refinement box covers the horizon instead -- which is
+# also how a horizon is resolved in a real run.
+#
+# Base:  +/-8 domain, 8^3 blocks, level 2  -> 32 cells/axis, dx = 0.5
+# Box:   |x| < 2.5 at target_level_delta 2 -> level 4,       dx = 0.125
+#
+# The box is kept only just large enough to contain the horizon (r = 2M) and
+# the initial guess: refinement volume drives the cost, and widening it to
+# |x| < 3.5 tripled the resident set to ~2.5 GB.  At dx = 0.125 the expansion
+# on the exact horizon evaluates to ~2e-2 from interpolated data, which limits
+# the recovered radius to a few percent -- the analytic-geometry test is what
+# verifies the solver itself.
+#
+# Note the boxes must be given as a `fmr_boxes` sequence.  Individually-named
+# `fmr_box_N` keys parse without complaint but are never read, leaving the
+# sequence empty (see src/amr/forest.cpp:171 and parameters/amr.yaml).
+name: "grace"
+amr: {
+  npoints_block_x: 8,
+  npoints_block_y: 8,
+  npoints_block_z: 8,
+  xmin: -8,
+  xmax: 8,
+  ymin: -8,
+  ymax: 8,
+  zmin: -8,
+  zmax: 8,
+  n_ghostzones: 2,
+  initial_refinement_level: 2,
+  max_refinement_level: 6,
+  regrid_every: -1,
+  regrid_at_postinitial: false,
+  n_fmr_boxes: 1,
+  fmr_boxes: [
+    {
+      target_level_delta: 2,
+      x_min: -2.5, x_max: 2.5,
+      y_min: -2.5, y_max: 2.5,
+      z_min: -2.5, z_max: 2.5
+    }
+  ]
+}
+coordinate_system: {
+  is_kerr_schild: true,
+  bh_spin: 0.0
+}
+grmhd: {
+  id_type: "minkowski_vacuum",
+  # Drives the AH-following matter excision, so the published spheres are
+  # actually honoured and can be checked against the surface they came from.
+  excision: {
+    excision_criterion: "horizon",
+    excision_horizon_factor: 0.8
+  }
+}
+IO: {
+  info_output_every: 0
+}
+system: {
+  console_log_level: "warn",
+  n_device_streams: 3
+}
+checkpoints: {
+  checkpoint_at_termination: false
+}
+
+# Two independent horizons.  "AH" is the real one (the hole at the origin);
+# "AH_offgrid" is deliberately placed where no horizon exists, to check that one
+# failing search does not disturb the other.  A detector tracks "AH".
+apparent_horizon: {
+  n_horizons: 3,
+  find_every: 2,
+  verbose: false,
+  output_shape: true,
+  # Far beyond any iteration this test reaches, so the modulo can only fire at
+  # iteration 0. That is what lets the shape-cadence test tell "first find of
+  # the process" apart from "cadence came round".
+  shape_output_every: 1000,
+  # Exercises the matter sampling path end to end. The ID is vacuum with an
+  # atmosphere at rest and no magnetic field, so every flux must come out at
+  # zero -- which is exactly what makes it a usable assertion.
+  compute_fluxes: true,
+  horizons: [
+    {
+      name: "AH",
+      l_max: 6,
+      initial_radius: 2.4,
+      center_x: 0.0, center_y: 0.0, center_z: 0.0,
+      tolerance: 2.0e-2,
+      max_iterations: 40,
+      max_relative_step: 0.1,
+      track_center: true,
+      find_every: -1,
+      enabled: true
+    },
+    {
+      name: "AH_far",
+      l_max: 4,
+      initial_radius: 0.6,
+      center_x: 6.5, center_y: 0.0, center_z: 0.0,
+      tolerance: 2.0e-2,
+      max_iterations: 6,
+      max_relative_step: 0.1,
+      track_center: false,
+      find_every: 3,
+      enabled: true
+    },
+    {
+      name: "AH_common",
+      role: "common",
+      parents: ["AH", "AH_far"],
+      l_max: 4,
+      initial_radius: 4.0,
+      center_x: 0.0, center_y: 0.0, center_z: 0.0,
+      tolerance: 2.0e-2,
+      max_iterations: 6,
+      max_relative_step: 0.1,
+      track_center: false,
+      find_every: 2,
+      trigger_separation_factor: 2.5,
+      parent_staleness_limit: 4,
+      enabled: true
+    }
+  ]
+}
+spherical_surfaces: {
+  n_surfaces: 1,
+  spherical_detectors: [
+    {
+      name: "tracker",
+      tracking: "apparent_horizon",
+      tracking_target: "AH",
+      tracking_radius_factor: 1.5,
+      radius: 5.0,
+      x_c: 0.0, y_c: 0.0, z_c: 0.0,
+      sampling_policy: "uniform",
+      resolution: 9
+    }
+  ]
+}

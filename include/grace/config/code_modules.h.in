@@ -61,6 +61,7 @@ const std::vector< std::string > code_modules {
     #endif
     , "co_tracker"
     , "mhd_diagnostics"
+    , "apparent_horizon"
     #ifdef GRACE_ENABLE_PARTICLES
     , "particles"
     #endif
@@ -92,6 +93,7 @@ const std::vector< std::string > code_modules_default_configs {
      #endif
      , "${CMAKE_SOURCE_DIR}/parameters/co_tracker.yaml"
      , "${CMAKE_SOURCE_DIR}/parameters/mhd_diagnostics.yaml"
+     , "${CMAKE_SOURCE_DIR}/parameters/apparent_horizon.yaml"
      #ifdef GRACE_ENABLE_PARTICLES
      , "${CMAKE_SOURCE_DIR}/parameters/particles.yaml"
      #endif

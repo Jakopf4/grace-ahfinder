@@ -32,6 +32,7 @@
 #ifndef GRACE_NEW_DELETE_ALLOCATOR_HH
 #define GRACE_NEW_DELETE_ALLOCATOR_HH
 
+#include <cstddef>
 #include <cstdlib>
 #include <memory_resource> 
 #include <iostream> 
@@ -61,7 +62,15 @@ class new_delete_allocator
         allocate(std::size_t size,
                  std::size_t alignment ) 
         {
-            return std::aligned_alloc(alignment, size) ; 
+            // std::aligned_alloc requires `size` to be an integral multiple of
+            // `alignment`, and `alignment` to be a supported power of two.
+            // glibc tolerates violations of the first rule; the macOS libc
+            // returns nullptr instead, which surfaces far from here as a
+            // singleton constructed on a null `this`.  Normalise both.
+            if( alignment < alignof(void*) ) { alignment = alignof(void*) ; }
+            if( size == 0 ) { size = alignment ; }
+            std::size_t const padded = ((size + alignment - 1) / alignment) * alignment ;
+            return std::aligned_alloc(alignment, padded) ; 
         } 
         //**************************************************************************************************
 

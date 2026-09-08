@@ -181,3 +181,47 @@ gw_integrals: {
   detector_names: ["GW_1"],
   detector_indices: []
 }
+
+# --- Apparent horizon -------------------------------------------------------
+#
+# One horizon at the origin.  The puncture stays there (P = 0), but track_center
+# is on anyway: it costs nothing and the surface is re-expressed about the new
+# origin rather than translated, so the warm start survives.
+#
+# The grid is equatorially symmetric (reflection_symmetries.z), so the lower
+# half of every collocation-point set lies outside the computed domain.  The
+# finder samples the mirror points and carries the ADM tensors back across the
+# plane by their parity, which is exact for a spacetime that has the symmetry.
+# Nothing here has to be configured for that.
+#
+# Sizing: the horizon of an M = 1, chi = 0.5 puncture sits near r ~ 0.4 in these
+# coordinates at t = 0 and grows as the slice relaxes towards a trumpet.  The
+# guess starts outside it, where the expansion is positive and the Newton solve
+# descends inwards; after the first find every later search warm-starts from the
+# previous shape and converges in a couple of iterations.  At the finest
+# dx = 0.0833 that is 5-10 cells per horizon radius, which is enough.
+#
+# tolerance x initial_radius must stay below ~1e-3: Theta has dimensions of
+# 1/length, so a tolerance only means something relative to 1/R, and a loose one
+# can be satisfied by the initial guess itself.  The manager warns if it is not.
+apparent_horizon: {
+  n_horizons: 1,
+  find_every: 16,
+  verbose: true,
+  output_shape: false,
+
+  horizons: [
+    {
+      name: "AH",
+      l_max: 8,
+      initial_radius: 0.8,
+      center_x: 0.0, center_y: 0.0, center_z: 0.0,
+      tolerance: 2.0e-4,
+      max_iterations: 40,
+      max_relative_step: 0.1,
+      track_center: true,
+      find_every: -1,
+      enabled: true
+    }
+  ]
+}

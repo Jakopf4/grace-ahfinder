@@ -26,6 +26,8 @@ add_subdirectory(evolution)
 
 add_subdirectory(physics)
 
+add_subdirectory(geometry)
+
 add_subdirectory(config)
 
 if( GRACE_ENABLE_PARTICLES )

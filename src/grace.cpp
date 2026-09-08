@@ -47,6 +47,7 @@
 #include <grace/IO/scalar_output.hh>
 #include <grace/IO/output_diagnostics.hh>
 #include <grace/IO/diagnostics/co_tracker.hh>
+#include <grace/geometry/horizon_manager.hh>
 #include <grace/system/nan_check.hh>
 #include <grace/physics/b_field_injection.hh>
 #if GRACE_METRIC_EVOL == GRACE_METRIC_EVOL_Z4
@@ -94,6 +95,18 @@ int main(int argc, char* argv[])
     grace::IO::initialize_diagnostic_files() ;
     grace::IO::write_scalar_output() ;
     grace::IO::output_diagnostics() ;
+    /**********************************************************************************/
+    /* Locate apparent horizons on the initial data                                   */
+    /*                                                                                */
+    /* find_and_write() is otherwise only reached inside the evolution loop, which    */
+    /* runs after the first evolve(), so without this the horizon is never found at   */
+    /* t = 0 -- exactly when it is wanted, to check the initial data and report the   */
+    /* starting masses.  Skipped on a restart, where the state already carries the    */
+    /* horizon from the checkpoint and the row would duplicate one already written.   */
+    /**********************************************************************************/
+    if (!grace::checkpoint_handler::get().have_checkpoint()) {
+        grace::horizon_manager::get().find_and_write() ;
+    }
     /**********************************************************************************/
     /* Optional NaN scan over evolved variables before the first step                 */
     /**********************************************************************************/
@@ -209,6 +222,13 @@ int main(int argc, char* argv[])
         /* Inject B field mid-run if requested                                            */
         /**********************************************************************************/
         grace::maybe_inject_b_field() ;
+        /**********************************************************************************/
+        /* Locate apparent horizons if needed                                             */
+        /*                                                                                */
+        /* Ahead of the spherical-surface update on purpose: a surface that   */
+        /* tracks a horizon must see this step's shape, not the previous one. */
+        /**********************************************************************************/
+        grace::horizon_manager::get().find_and_write() ;
         /**********************************************************************************/
         /* Update spherical surfaces if needed                                            */
         /**********************************************************************************/

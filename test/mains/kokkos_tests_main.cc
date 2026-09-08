@@ -14,7 +14,11 @@ int main(int argc, char* argv[])
     parallel::mpi_init(&argc, &argv);
     Kokkos::initialize(argc, argv);
     grace::config_parser::initialize("configs/basic_config.yaml");
-    int result = Catch::Session().run(argc, argv);
+    // Deterministic, rank-independent ordering; see p4est_tests_main.cc.
+    Catch::Session session;
+    session.configData().runOrder = Catch::TestRunOrder::Declared;
+    session.configData().rngSeed  = 1;
+    int result = session.run();
     Kokkos::finalize();
     parallel::mpi_finalize();
     return result;

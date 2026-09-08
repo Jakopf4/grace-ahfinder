@@ -333,3 +333,83 @@ TEST_CASE("grid_interpolator_t<hermite,3>: NaN-fenced ghost budget, "
         }
     }
 }
+
+
+//---------------------------------------------------------------------------
+// Lagrange Hessian
+//---------------------------------------------------------------------------
+
+TEST_CASE("grid_interpolator_t<lagrange,4>: exact value, gradient and Hessian "
+          "for a cubic", "[grid_interpolator][lagrange]")
+{
+    // A degree-4 Lagrange basis reproduces any polynomial of degree <= 4
+    // exactly, and so do its first and second derivatives.  The cubic below has
+    // every mixed term present, so all six Hessian components are exercised
+    // rather than only the diagonal.
+    using namespace grace;
+    DECLARE_GRID_EXTENTS;
+    REQUIRE(nq > 0);
+
+    auto f = [](double x, double y, double z) {
+        return 1.0 + 2.0*x - 0.5*y + 0.25*z
+             + 0.30*x*x - 0.20*y*y + 0.15*z*z
+             + 0.40*x*y + 0.10*x*z - 0.35*y*z
+             + 0.05*x*x*y - 0.06*y*y*z + 0.07*x*z*z;
+    };
+    auto grad = [](double x, double y, double z) {
+        return std::array<double,3>{
+            2.0 + 0.60*x + 0.40*y + 0.10*z + 0.10*x*y + 0.07*z*z,
+           -0.5 - 0.40*y + 0.40*x - 0.35*z + 0.05*x*x - 0.12*y*z,
+            0.25 + 0.30*z + 0.10*x - 0.35*y - 0.06*y*y + 0.14*x*z };
+    };
+    // Packed (xx, xy, xz, yy, yz, zz).
+    auto hess = [](double x, double y, double z) {
+        return std::array<double,6>{
+            0.60 + 0.10*y,
+            0.40 + 0.10*x,
+            0.10 + 0.14*z,
+           -0.40 - 0.12*z,
+           -0.35 - 0.12*y,
+            0.30 + 0.14*x };
+    };
+
+    auto queries = build_x_row_queries(/*test_q=*/0, offset_pos);
+    REQUIRE(queries.points.size() == static_cast<size_t>(nx));
+
+    int const valid_gz = static_cast<int>(ngz);
+    fill_state_with_polynomial_and_nan_fence(0, valid_gz, f);
+
+    grid_interpolator_t<poly_kind::lagrange, 4> interp(valid_gz);
+    interp.compute_weights(queries.points, queries.ipoints, queries.icells);
+
+    Kokkos::View<double**,  default_space> out("h_val",  0, 0);
+    Kokkos::View<double***, default_space> grd("h_grad", 0, 0, 0);
+    Kokkos::View<double***, default_space> hsn("h_hess", 0, 0, 0);
+
+    auto& state = variable_list::get().getstate();
+    interp.interpolate_with_hessian(state, std::vector<int>{0}, out, grd, hsn);
+
+    auto out_h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), out);
+    auto grd_h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), grd);
+    auto hsn_h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), hsn);
+
+    for (size_t i = 0; i < queries.ipoints.size(); ++i) {
+        auto const& pc = queries.points[queries.ipoints[i]].second;
+        double const x = pc[0], y = pc[1], z = pc[2];
+        INFO("point " << i << " at (" << x << ", " << y << ", " << z << ")");
+
+        REQUIRE_THAT(out_h(i,0), Catch::Matchers::WithinAbs(f(x,y,z), 1e-9));
+
+        auto const g = grad(x,y,z);
+        for (int d = 0; d < 3; ++d) {
+            INFO("gradient component " << d);
+            REQUIRE_THAT(grd_h(i,0,d), Catch::Matchers::WithinAbs(g[d], 1e-8));
+        }
+
+        auto const hx = hess(x,y,z);
+        for (int d = 0; d < 6; ++d) {
+            INFO("Hessian component " << d);
+            REQUIRE_THAT(hsn_h(i,0,d), Catch::Matchers::WithinAbs(hx[d], 1e-7));
+        }
+    }
+}

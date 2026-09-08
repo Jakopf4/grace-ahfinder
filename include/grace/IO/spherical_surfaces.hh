@@ -96,7 +96,9 @@ struct spherical_surface_t: public spherical_surface_iface {
         size_t const& _res
     ) : base_t(_name,_r,c,_res)
     {
-        tracker = TrackingPolicy() ; 
+        // The policy is told which surface it belongs to, so a tracking
+        // policy can resolve what it should follow.
+        tracker = TrackingPolicy(this->name) ; 
         this->update() ; 
     }
 

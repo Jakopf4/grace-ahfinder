@@ -28,6 +28,7 @@
 #define GRACE_PHYSICS_M1_HELPERS_HH
 
 #include <grace_config.h>
+#include <grace/physics/grmhd_helpers.hh>
 
 #include <grace/utils/grace_utils.hh>
 
@@ -396,14 +397,41 @@ struct m1_atmo_params_t {
 
 struct m1_excision_params_t {
     bool excise_by_radius ; 
+    //! Whether located apparent horizons contribute, additively to the lapse
+    //! test. Kept in step with the hydro criterion: excising the matter inside
+    //! a horizon but leaving the radiation there would be inconsistent.
+    bool excise_by_horizon = false ;
     double r_ex, alp_ex ; 
     double E_ex, eps_ex ;  
+    int    n_ex_spheres = 0 ;
+    double ex_sphere[GRACE_MAX_EXCISION_SPHERES][4] = {} ;
+
+    KOKKOS_INLINE_FUNCTION
+    bool inside_horizon(double const* xyz) const {
+        for (int s = 0; s < n_ex_spheres; ++s) {
+            double const dx = xyz[0] - ex_sphere[s][0] ;
+            double const dy = xyz[1] - ex_sphere[s][1] ;
+            double const dz = xyz[2] - ex_sphere[s][2] ;
+            double const rr = ex_sphere[s][3] ;
+            if (dx*dx + dy*dy + dz*dz <= rr*rr) return true ;
+        }
+        return false ;
+    }
 } ;
 
 static m1_excision_params_t 
 get_m1_excision_params() {
     m1_excision_params_t m1_excision_params ;
-    m1_excision_params.excise_by_radius = ( grace::get_param<std::string>("grmhd", "excision", "excision_criterion") == "radius"); 
+    auto const m1_excision_kind = grace::get_param<std::string>("grmhd", "excision", "excision_criterion") ;
+    m1_excision_params.excise_by_radius  = (m1_excision_kind == "radius") ;
+    m1_excision_params.excise_by_horizon = (m1_excision_kind == "horizon") ;
+    if (m1_excision_params.excise_by_horizon) {
+        auto const& store = grace::detail::excision_sphere_store() ;
+        m1_excision_params.n_ex_spheres = store.n ;
+        for (int i = 0; i < store.n; ++i)
+            for (int d = 0; d < 4; ++d)
+                m1_excision_params.ex_sphere[i][d] = store.s[i][d] ;
+    }
     m1_excision_params.r_ex = grace::get_param<double>("grmhd", "excision", "excision_radius");
     m1_excision_params.alp_ex = grace::get_param<double>("grmhd", "excision", "excision_lapse");
     m1_excision_params.E_ex = grace::get_param<double>("m1", "excision", "E_excision") ; 

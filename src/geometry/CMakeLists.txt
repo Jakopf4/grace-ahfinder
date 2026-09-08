@@ -1,0 +1,1 @@
+register_grace_object(grace_horizon_manager horizon_manager.cpp)

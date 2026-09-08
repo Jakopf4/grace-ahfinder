@@ -107,6 +107,31 @@ class checkpoint_handler_impl_t
     //*****************************************************************************************************
 
     //*****************************************************************************************************
+    /**
+     * @brief Write apparent-horizon state to its own small file beside the
+     *        checkpoint, `checkpoint_ah_<iter>.h5`.
+     *
+     * Serial, rank 0 only: horizon state is bit-identical on every rank, so
+     * there is nothing to gather. Kept out of the main checkpoint because that
+     * file runs to O(100 GB) in production and horizon state is a few KB that
+     * one wants to inspect, copy and diff on its own.
+     *
+     * Losing this file costs a warm start and nothing else, so it is never
+     * required for a checkpoint to be restartable.
+     */
+    void save_horizon_checkpoint(int64_t iter) const ;
+    //*****************************************************************************************************
+
+    //*****************************************************************************************************
+    /**
+     * @brief Restore apparent-horizon state from `checkpoint_ah_<iter>.h5`.
+     * @return False if the file does not exist, so the caller can fall back to
+     *         the legacy group inside the main checkpoint file.
+     */
+    bool load_horizon_checkpoint(int64_t iter) const ;
+    //*****************************************************************************************************
+
+    //*****************************************************************************************************
     std::deque<int64_t> checkpoint_list  ; //!< List of available checkpoints (iterations)
     unsigned int max_n_checkpoints       ; //!< Max number of checkpoints that are allowed to exist at once
     std::filesystem::path checkpoint_dir ; //!< Directory containing checkpoints 

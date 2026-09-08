@@ -23,10 +23,29 @@ spherical_surfaces:
           Name of the detector
       tracking:
         type: keyword
-        allowed: ["none"]
+        allowed: ["none", "apparent_horizon"]
         default: "none"
         description: >
-          Tracking policy for the sphere 
+          Tracking policy for the sphere.  "apparent_horizon" makes the surface
+          follow a horizon located by the apparent_horizon module: its centre
+          moves to the horizon centroid and its radius becomes
+          tracking_radius_factor times the horizon's mean coordinate radius.
+          The surface keeps its configured geometry until that horizon is first
+          found.
+      tracking_target:
+        type: string
+        default: ""
+        description: >
+          Name of the apparent horizon to follow.  Empty means the horizon with
+          the same name as this detector.  Ignored unless tracking is
+          "apparent_horizon".
+      tracking_radius_factor:
+        type: double
+        range: "(0,*)"
+        default: 1.0
+        description: >
+          Detector radius as a multiple of the tracked horizon's mean
+          coordinate radius.  Use a value above 1 to sit outside the horizon. 
       radius: 
         type: double 
         range: "(0,*)"

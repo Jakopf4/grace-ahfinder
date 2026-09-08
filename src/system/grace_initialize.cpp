@@ -29,6 +29,7 @@
 
 #include <grace/system/grace_initialize.hh> 
 
+#include <grace/geometry/horizon_manager.hh>
 #include <grace/system/mpi_runtime.hh>
 #include <grace/system/p4est_runtime.hh>
 #include <grace/system/kokkos_runtime.hh>
@@ -254,6 +255,12 @@ void initialize(int& argc, char* argv[])
         // initialize trackers before reading checkpoint
         // since it contains previous locations
         grace::co_tracker::initialize() ;
+
+        // Horizons likewise hold state the checkpoint restores (the surface
+        // shape a search warm-starts from).  This must also precede
+        // spherical_surface_manager below, so a detector configured to follow a
+        // horizon can resolve it while being constructed.
+        grace::horizon_manager::initialize() ;
     }
     
     GRACE_INFO("Filling coordinate arrays...") ;

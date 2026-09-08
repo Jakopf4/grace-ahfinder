@@ -318,8 +318,14 @@ struct grmhd_equations_system_t
         using namespace grace ;
         using namespace Kokkos ; 
 
-        double rtp[3] ; 
-        coords.get_physical_coordinates_sph(i,j,k,q,rtp) ; 
+        // Both forms are needed: the radius criterion works in the coordinate
+        // radius (which is not |x| in CKS), while the horizon spheres move and
+        // so have to be tested in Cartesian coordinates.
+        double ccoords[3] = {0.5,0.5,0.5} ;
+        double xyz[3] ;
+        coords.get_physical_coordinates(i,j,k,q,ccoords,xyz,1) ;
+        double rtp[3] ;
+        coords.cart_to_sph(xyz,rtp) ; 
 
         auto vars = subview(
               this->_state
@@ -382,7 +388,7 @@ struct grmhd_equations_system_t
         grmhd_prims_array_t prims ;
         conservs_to_prims<eos_t>(
             cons, prims, metric, this->_eos,
-            this->atmo_params, this->excision_params, this->c2p_params, rtp,
+            this->atmo_params, this->excision_params, this->c2p_params, rtp, xyz,
             c2p_errors, /*dry_run=*/false, this->clamp_to_atmo ) ;
 
 

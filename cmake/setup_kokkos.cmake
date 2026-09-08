@@ -78,6 +78,8 @@ if( GRACE_ENABLE_SERIAL AND (NOT Kokkos_ENABLE_SERIAL))
 endif()
 
 if( GRACE_ENABLE_OMP )
+    # The OpenMP runtime is resolved in cmake/setup_openmp.cmake, which must
+    # run before the first find_package(OpenMP) in the top-level CMakeLists.
     find_package(OpenMP REQUIRED)
 endif()
 

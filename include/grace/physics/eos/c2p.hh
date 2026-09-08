@@ -366,6 +366,7 @@ conservs_to_prims( grace::grmhd_cons_array_t&
                       , excision_params_t const& excision
                       , c2p_params_t const& c2p_pars
                       , double * rtp
+                      , double const * xyz
                       , c2p_err_t& c2p_err
                       , bool dry_run = false
                       , bool clamp_to_atmo = true ) ;
@@ -386,6 +387,7 @@ conservs_to_prims<EOS>( grace::grmhd_cons_array_t&  \
                       , excision_params_t const& excision \
                       , c2p_params_t const& c2p_pars \
                       , double * rtp \
+                      , double const * xyz \
                       , c2p_err_t& c2p_err \
                       , bool dry_run \
                       , bool clamp_to_atmo )

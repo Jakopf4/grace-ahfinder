@@ -172,7 +172,9 @@ struct grid_interpolator_t;
  */
 template <size_t order>
 struct interp_weights_t {
-    double w[order+1][3];
+    double w [order+1][3];   ///< basis value
+    double w1[order+1][3];   ///< d/dx of the basis, physical units
+    double w2[order+1][3];   ///< d2/dx2 of the basis, physical units
 };
 
 template <int Order>
@@ -240,6 +242,100 @@ struct grid_interpolator_t<poly_kind::lagrange, Order> {
                     }
                 }
                 out(ip,iv) = val;
+            }
+        );
+    }
+
+    /**
+     * @brief Interpolate values, Cartesian gradients and Hessians.
+     *
+     * @param out       (npoints, nvars)
+     * @param out_grad  (npoints, nvars, 3)      -- d/dx, d/dy, d/dz
+     * @param out_hess  (npoints, nvars, 6)      -- packed symmetric
+     *                  (xx, xy, xz, yy, yz, zz), matching adm_sym ordering.
+     *
+     * The Hessian is what the intrinsic curvature of a surface needs: the
+     * 2-metric's second angular derivatives pull in d_k d_l gamma_ij, which no
+     * amount of angular resolution can supply.
+     *
+     * Second derivatives converge one order slower than the gradient, so at
+     * Order = 4 expect O(h^3) here against O(h^4) on values.
+     */
+    void interpolate_with_hessian(
+        grace::var_array_t data,
+        std::vector<int> const& var_idx_h,
+        Kokkos::View<double**,  grace::default_space>& out,
+        Kokkos::View<double***, grace::default_space>& out_grad,
+        Kokkos::View<double***, grace::default_space>& out_hess
+    ) const
+    {
+        DECLARE_GRID_EXTENTS;
+        using namespace grace;
+        using namespace Kokkos;
+
+        auto nvars = var_idx_h.size();
+
+        readonly_view_t<int> var_idx;
+        deep_copy_vec_to_const_view(var_idx, var_idx_h);
+
+        Kokkos::realloc(out,      npoints, nvars);
+        Kokkos::realloc(out_grad, npoints, nvars, 3);
+        Kokkos::realloc(out_hess, npoints, nvars, 6);
+
+        auto icells     = intersected_cells;
+        auto iweights   = interp_weights;
+        auto istencils  = interp_stencils;
+
+        MDRangePolicy<Rank<2>> policy({0,0}, {npoints, static_cast<long>(nvars)});
+        parallel_for(
+            GRACE_EXECUTION_TAG("IO", "interp_lagrange_hessian"),
+            policy,
+            KOKKOS_LAMBDA (int const& ip, int const& iv) {
+                auto const& cell = icells(ip);
+                auto q  = cell.q;
+                auto w  = iweights(ip);
+                auto u  = subview(data, ALL(), ALL(), ALL(), var_idx(iv), q);
+                int bx = istencils(ip,0);
+                int by = istencils(ip,1);
+                int bz = istencils(ip,2);
+
+                constexpr int H = stencil_half;
+
+                double val = 0.0;
+                double g[3]  = {0.0, 0.0, 0.0};
+                double hh[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+
+                for (int i = 0; i < Order+1; ++i) {
+                    int const ic = static_cast<int>(ngz + cell.i) + i - H + bx;
+                    for (int j = 0; j < Order+1; ++j) {
+                        int const jc = static_cast<int>(ngz + cell.j) + j - H + by;
+                        for (int k = 0; k < Order+1; ++k) {
+                            int const kc = static_cast<int>(ngz + cell.k) + k - H + bz;
+                            double const f = u(ic,jc,kc);
+
+                            double const a0 = w.w [i][0], b0 = w.w [j][1], c0 = w.w [k][2];
+                            double const a1 = w.w1[i][0], b1 = w.w1[j][1], c1 = w.w1[k][2];
+                            double const a2 = w.w2[i][0], b2 = w.w2[j][1], c2 = w.w2[k][2];
+
+                            val  += a0 * b0 * c0 * f;
+
+                            g[0] += a1 * b0 * c0 * f;
+                            g[1] += a0 * b1 * c0 * f;
+                            g[2] += a0 * b0 * c1 * f;
+
+                            hh[0] += a2 * b0 * c0 * f;   // xx
+                            hh[1] += a1 * b1 * c0 * f;   // xy
+                            hh[2] += a1 * b0 * c1 * f;   // xz
+                            hh[3] += a0 * b2 * c0 * f;   // yy
+                            hh[4] += a0 * b1 * c1 * f;   // yz
+                            hh[5] += a0 * b0 * c2 * f;   // zz
+                        }
+                    }
+                }
+
+                out(ip,iv) = val;
+                for (int d = 0; d < 3; ++d) out_grad(ip,iv,d) = g[d];
+                for (int d = 0; d < 6; ++d) out_hess(ip,iv,d) = hh[d];
             }
         );
     }
@@ -332,6 +428,78 @@ struct grid_interpolator_t<poly_kind::lagrange, Order> {
                 }
                 for (int ic = 0; ic < Order+1; ++ic) {
                     iweights.w[ic][idir] /= norm;
+                }
+
+                // Basis derivatives.
+                //
+                // Differentiating the barycentric form above is ill-conditioned
+                // as the query approaches a node, so the derivatives are built
+                // from the product form in the local uniform coordinate
+                // s = (x - x_node0)/dx, where the nodes sit at integers
+                // 0..Order:
+                //
+                //     L_i(s)   = prod_{j!=i} (s-j)            / D_i
+                //     L_i'(s)  = sum_k prod_{j!=i,k} (s-j)    / D_i
+                //     L_i''(s) = sum_k sum_{m!=k} prod_{j!=i,k,m} (s-j) / D_i
+                //
+                // with D_i = prod_{j!=i} (i-j). No division by (s-j) appears,
+                // so this stays accurate right at the nodes. At Order = 4 it is
+                // a few hundred flops per point per axis, on the host, once.
+                {
+                    // Position of the query in units of dx, measured from the
+                    // first stencil node.
+                    int const off0 = 0 - H + bias[idir];
+                    int const off1 = 1 - H + bias[idir];
+                    std::array<size_t,3> ijk0{{
+                        ijkq.i + off0 * (idir==0),
+                        ijkq.j + off0 * (idir==1),
+                        ijkq.k + off0 * (idir==2)
+                    }};
+                    std::array<size_t,3> ijk1{{
+                        ijkq.i + off1 * (idir==0),
+                        ijkq.j + off1 * (idir==1),
+                        ijkq.k + off1 * (idir==2)
+                    }};
+                    auto p0 = coord_system.get_physical_coordinates(
+                        ijk0, ijkq.q, {0.5,0.5,0.5}, false);
+                    auto p1 = coord_system.get_physical_coordinates(
+                        ijk1, ijkq.q, {0.5,0.5,0.5}, false);
+
+                    // PHYSICAL node spacing, taken from the node positions
+                    // themselves.  coord_system.get_spacing() is *logical*
+                    // (1/nx within a tree); it cancels out of the barycentric
+                    // value weights above but emphatically does not cancel when
+                    // converting d/ds into d/dx.
+                    double const dx_phys = p1[idir] - p0[idir];
+                    double const sq = (point_coords[idir] - p0[idir]) / dx_phys;
+
+                    double const inv_dx  = 1.0 / dx_phys;
+                    double const inv_dx2 = inv_dx * inv_dx;
+
+                    for (int ic = 0; ic < Order+1; ++ic) {
+                        double denom = 1.0;
+                        for (int j = 0; j < Order+1; ++j)
+                            if (j != ic) denom *= static_cast<double>(ic - j);
+
+                        double d1 = 0.0, d2 = 0.0;
+                        for (int k = 0; k < Order+1; ++k) {
+                            if (k == ic) continue;
+                            double prod1 = 1.0;
+                            for (int j = 0; j < Order+1; ++j)
+                                if (j != ic && j != k) prod1 *= (sq - j);
+                            d1 += prod1;
+
+                            for (int m = 0; m < Order+1; ++m) {
+                                if (m == ic || m == k) continue;
+                                double prod2 = 1.0;
+                                for (int j = 0; j < Order+1; ++j)
+                                    if (j != ic && j != k && j != m) prod2 *= (sq - j);
+                                d2 += prod2;
+                            }
+                        }
+                        iweights.w1[ic][idir] = d1 * inv_dx  / denom;
+                        iweights.w2[ic][idir] = d2 * inv_dx2 / denom;
+                    }
                 }
             }
             weights[i] = iweights;

@@ -178,8 +178,9 @@ TEST_CASE("c2p round-trip / Minkowski, no B", "[c2p][hydro]")
         grmhd_prims_array_t p1 = p0 ;
         c2p_err_t c2p_err ;
         double rtp[3] = {1.0, 1.0, 1.0} ;
+        double xyz[3] = {1.0, 0.0, 0.0} ;
         bool const ok = conservs_to_prims(cons, p1, metric, eos, atmo, excision,
-                                           c2p_pars, rtp, c2p_err) ;
+                                           c2p_pars, rtp, xyz, c2p_err) ;
         residual(idx)  = prim_residual(p1, p0) ;
         floored(idx) = ok ? 1 : 0 ;
     }) ;
@@ -290,8 +291,9 @@ TEST_CASE("c2p round-trip / Minkowski, magnetisation sweep", "[c2p][mhd]")
         grmhd_prims_array_t p1 = p0 ;
         c2p_err_t c2p_err ;
         double rtp[3] = {1.0, 1.0, 1.0} ;
+        double xyz[3] = {1.0, 0.0, 0.0} ;
         bool const ok = conservs_to_prims(cons, p1, metric, eos, atmo, excision,
-                                           c2p_pars, rtp, c2p_err) ;
+                                           c2p_pars, rtp, xyz, c2p_err) ;
         residual(idx)  = prim_residual(p1, p0) ;
         floored(idx) = ok ? 1 : 0 ;
         // Stash reference + recovered prim components for failure diagnosis.
@@ -417,8 +419,9 @@ TEST_CASE("c2p round-trip / Schwarzschild-CKS, no B", "[c2p][hydro][curved]")
         grmhd_prims_array_t p1 = p0 ;
         c2p_err_t c2p_err ;
         double rtp[3] = {1.0, 1.0, 1.0} ;
+        double xyz[3] = {1.0, 0.0, 0.0} ;
         bool const ok = conservs_to_prims(cons, p1, metric, eos, atmo, excision,
-                                           c2p_pars, rtp, c2p_err) ;
+                                           c2p_pars, rtp, xyz, c2p_err) ;
         residual(idx)  = prim_residual(p1, p0) ;
         floored(idx) = ok ? 1 : 0 ;
     }) ;
