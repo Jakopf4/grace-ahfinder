@@ -341,15 +341,13 @@ void write_data_hdf5(
     HDF5_CALL(space_id_glob, H5Screate_simple(1, dset_dims_glob, NULL)) ;
     /* Dataset properties */
     hid_t prop_id ; 
-    HDF5_CALL(prop_id, H5Pcreate(H5P_DATASET_CREATE)) ; 
-    constexpr size_t target_chunk_bytes = 8 * 1024 * 1024; // 8MB target
-    size_t target_chunk_elems = target_chunk_bytes / sizeof(double);
-
-    // Chunk must not exceed total dataset size
-    hsize_t chunk_dim[1] = { std::min(target_chunk_elems, dim_glob) };
-
-    // Apply dataset chunking policy
-    HDF5_CALL(err, H5Pset_chunk(prop_id, 1, chunk_dim));
+    HDF5_CALL(prop_id, H5Pcreate(H5P_DATASET_CREATE)) ;
+    // Contiguous layout, deliberately not chunked.  The state is written
+    // uncompressed and never extended, so chunking buys nothing here, and on
+    // Hunter (HLRS/APU 2026.1, Cray MPICH) a collective write into a chunked
+    // dataset hangs every rank inside H5Dwrite.  grace-m1 has run without
+    // chunking on Hunter since 0d6f1535.  The reader does not depend on the
+    // layout, so older chunked checkpoints still restore.
 
     /* Create dataset */
     hid_t dset_id ; 
