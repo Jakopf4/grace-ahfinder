@@ -296,6 +296,27 @@ apparent_horizon:
           near tips meet while their centres are still far apart, which the
           separation test -- which treats both surfaces as spheres -- would miss.
 
+      activation_lapse:
+        type: double
+        range: "[0,*)"
+        default: 0.0
+        description: >
+          Keep this horizon dormant until the global minimum of the lapse falls
+          below this value, then search on the normal cadence for the rest of
+          the run.  0 disables the gate and searches from the start.
+
+          Meant for a single collapsing star: before the horizon forms every
+          search ends at the runaway guard, which costs a full Newton solve per
+          find for nothing.  A horizon typically appears once the central lapse
+          has dropped to about 0.1, so a value of 0.2-0.3 starts searching in
+          good time.  The test is one global reduction per scheduled find, and
+          only while the horizon is dormant.
+
+          Ignored, with a warning, for a common horizon: that is already
+          triggered by its parents, which is the condition that matters for a
+          binary.  Once it has fired the gate stays open, including across a
+          checkpoint restart, even if the lapse later rises again.
+
       retry_every:
         type: int
         range: "[-1,*)"

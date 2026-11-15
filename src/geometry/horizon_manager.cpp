@@ -34,8 +34,13 @@
 #include <grace/parallel/mpi_wrappers.hh>
 #include <grace/system/grace_runtime.hh>
 #include <grace/system/print.hh>
+#include <grace/amr/amr_functions.hh>
+#include <grace/data_structures/variables.hh>
+
+#include <Kokkos_Core.hpp>
 
 #include <cmath>
+#include <limits>
 #include <map>
 #include <set>
 #include <sstream>
@@ -129,6 +134,21 @@ horizon_manager_impl_t::horizon_manager_impl_t() {
                 h["trigger_separation_factor"].as<double>();
             entry->parent_staleness_limit = static_cast<std::size_t>(
                 std::max(0, h["parent_staleness_limit"].as<int>()));
+        }
+        entry->activation_lapse = h["activation_lapse"].as<double>();
+        if (entry->activation_lapse > 0.0) {
+            if (entry->role == horizon_role_t::common) {
+                // A common horizon already waits for its parents, which is the
+                // condition that actually means something for a binary. A
+                // second gate could only delay it past the point it forms.
+                if (parallel::mpi_comm_rank() == 0)
+                    GRACE_WARN("AH [{}]: activation_lapse is ignored for a "
+                               "common horizon; it is triggered by its parents.",
+                               name);
+                entry->activation_lapse = 0.0;
+            } else {
+                entry->state = horizon_state_t::dormant;
+            }
         }
         entry->stop_after_failures = h["stop_after_failures"].as<int>();
         {
@@ -339,6 +359,50 @@ void horizon_manager_impl_t::seed_common_from_parents(horizon_entry_t& e) {
     e.surface.set_centre(centre);
     e.surface.set_sphere(r0);
     e.ever_found = false;   // this is a fresh guess, not a warm start
+}
+
+namespace {
+
+/// Global minimum of the lapse over the interior cells. Collective.
+double global_min_lapse() {
+#if (GRACE_METRIC_EVOL == GRACE_METRIC_EVOL_Z4) || (GRACE_METRIC_EVOL == GRACE_METRIC_EVOL_COWLING)
+    using namespace Kokkos;
+    DECLARE_GRID_EXTENTS;
+    auto state = variable_list::get().getstate();
+    double local = std::numeric_limits<double>::infinity();
+    MDRangePolicy<Rank<GRACE_NSPACEDIM+1>, default_execution_space>
+        policy({VEC(ngz,ngz,ngz),0}, {VEC(nx+ngz,ny+ngz,nz+ngz),nq});
+    parallel_reduce(GRACE_EXECUTION_TAG("AH","activation_lapse_min"), policy,
+        KOKKOS_LAMBDA(VEC(int const& i, int const& j, int const& k), int const& q,
+                      double& m) {
+            double const a = state(VEC(i,j,k), ALP_, q);
+            if (a < m) m = a;
+        }, Kokkos::Min<double>(local));
+    double global = local;
+    parallel::mpi_allreduce(&local, &global, 1, mpi_min);
+    return global;
+#else
+    return std::numeric_limits<double>::infinity();
+#endif
+}
+
+}  // namespace
+
+bool horizon_manager_impl_t::maybe_activate_on_lapse(int i, double alp_min) {
+    auto& e = *_horizons[i];
+    if (e.role != horizon_role_t::individual) return false;
+    if (e.state != horizon_state_t::dormant) return false;
+    if (!(e.activation_lapse > 0.0) || !(alp_min < e.activation_lapse))
+        return false;
+
+    e.state = horizon_state_t::searching;
+    e.consecutive_failures = 0;
+    if (parallel::mpi_comm_rank() == 0) {
+        GRACE_INFO("AH [{}]: minimum lapse {:.4f} fell below activation_lapse "
+                   "{:.4f}; beginning search.", e.name, alp_min,
+                   e.activation_lapse);
+    }
+    return true;
 }
 
 bool horizon_manager_impl_t::maybe_trigger_common(int i) {
@@ -672,6 +736,8 @@ void horizon_manager_impl_t::find_and_write() {
         any_due = due(*_horizons[i], iter);
     if (!any_due) return;
 
+    double alp_min = std::numeric_limits<double>::infinity();
+
     // Two passes: individuals, then commons. A common horizon's trigger must
     // see this step's parent shapes, not last step's. No cycles are possible
     // because a common horizon may not itself be a parent.
@@ -684,11 +750,22 @@ void horizon_manager_impl_t::find_and_write() {
             if (e.role != want) continue;
             if (!due(e, iter)) continue;
 
-            // Dormant commons cost nothing but the trigger test until their
-            // parents meet. Every rank evaluates it identically, so the
+            // Dormant horizons cost nothing but their trigger test: a common
+            // one waits for its parents to meet, an individual one for the
+            // lapse to collapse. Every rank evaluates it identically, so the
             // collective search below stays in lockstep.
             if (e.state == horizon_state_t::dormant) {
-                if (!maybe_trigger_common(i)) { write_output(e); continue; }
+                bool fired = false;
+                if (e.role == horizon_role_t::common) {
+                    fired = maybe_trigger_common(i);
+                } else {
+                    // One reduction per call, shared by every dormant entry,
+                    // and none at all once nothing is waiting on it.
+                    if (!(alp_min < std::numeric_limits<double>::infinity()))
+                        alp_min = global_min_lapse();
+                    fired = maybe_activate_on_lapse(i, alp_min);
+                }
+                if (!fired) { write_output(e); continue; }
             }
 
             auto const res = find_now(i);

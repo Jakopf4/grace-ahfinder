@@ -70,7 +70,9 @@ enum class horizon_role_t { individual, common };
 /// Where a horizon is in its life cycle. `found = 0` in the output alone cannot
 /// distinguish these, which is why the state is reported as its own column.
 enum class horizon_state_t {
-    dormant,    ///< A common horizon whose parents have not yet met.
+    dormant,    ///< Not searched yet: a common horizon whose parents have not
+                ///< met, or a horizon waiting for the lapse to fall below its
+                ///< `activation_lapse`.
     searching,  ///< Being searched for; may or may not be found each time.
     found,      ///< Located at the most recent attempt.
     abandoned   ///< Existed once, has failed repeatedly, no longer searched.
@@ -158,6 +160,15 @@ struct horizon_entry_t {
     /// regrid or a gauge transient must not lose a horizon for the rest of the
     /// run. Zero makes abandonment permanent.
     int              retry_every = 0;
+
+    /// Stay dormant until the global minimum of the lapse falls below this,
+    /// then search on the normal cadence for the rest of the run. Zero
+    /// disables the gate. Meant for a single collapsing star, where every
+    /// search before the horizon forms ends at the runaway guard; a binary's
+    /// common horizon has its own trigger and ignores this. The latch lives in
+    /// `state`, which the checkpoint carries, so a restart neither re-arms it
+    /// nor forgets that it fired.
+    double           activation_lapse = 0.0;
 
     horizon_state_t  state = horizon_state_t::searching;
     int              consecutive_failures = 0;
@@ -252,6 +263,13 @@ public:
     /// seed it from them and move it to `searching`. Returns true if it fired.
     /// Exposed so a test can drive the transition without a full step.
     bool maybe_trigger_common(int i);
+
+    /// Wake a dormant individual horizon once `alp_min`, the global minimum
+    /// of the lapse, has fallen below its `activation_lapse`. Returns true if
+    /// it fired. Every rank passes the same reduced value, so every rank makes
+    /// the same decision and the collective search below stays in lockstep.
+    /// Exposed so a test can drive the transition with a chosen lapse.
+    bool maybe_activate_on_lapse(int i, double alp_min);
 
     /// Hand the located horizons to the matter excision as a set of inscribed
     /// spheres. A no-op unless grmhd.excision.excision_criterion is "horizon".

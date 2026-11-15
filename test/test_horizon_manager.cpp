@@ -495,6 +495,80 @@ TEST_CASE("A common horizon triggers from its parents' last good result",
     p2.has_last_good = false;
 }
 
+TEST_CASE("activation_lapse holds a horizon dormant until the lapse collapses",
+          "[horizon_manager]") {
+    auto& mgr = horizon_manager::get();
+    int const i = mgr.index_of("AH");
+    REQUIRE(i >= 0);
+    auto& e = mgr.get(i);
+    REQUIRE(e.role == horizon_role_t::individual);
+
+    auto const saved_state = e.state;
+    auto const saved_gate  = e.activation_lapse;
+
+    SECTION("the gate opens below the threshold and stays open") {
+        e.activation_lapse = 0.3;
+        e.state = horizon_state_t::dormant;
+
+        REQUIRE_FALSE(mgr.maybe_activate_on_lapse(i, 0.5));
+        REQUIRE(e.state == horizon_state_t::dormant);
+        // Equal is not below: the lapse has to actually cross it.
+        REQUIRE_FALSE(mgr.maybe_activate_on_lapse(i, 0.3));
+        REQUIRE(e.state == horizon_state_t::dormant);
+
+        REQUIRE(mgr.maybe_activate_on_lapse(i, 0.2));
+        REQUIRE(e.state == horizon_state_t::searching);
+
+        // Latched: a lapse that recovers does not put it back to sleep, and a
+        // second call is not a second firing.
+        REQUIRE_FALSE(mgr.maybe_activate_on_lapse(i, 0.9));
+        REQUIRE(e.state == horizon_state_t::searching);
+    }
+
+    SECTION("a NaN lapse never opens it") {
+        e.activation_lapse = 0.3;
+        e.state = horizon_state_t::dormant;
+        REQUIRE_FALSE(mgr.maybe_activate_on_lapse(
+            i, std::numeric_limits<double>::quiet_NaN()));
+        REQUIRE(e.state == horizon_state_t::dormant);
+    }
+
+    SECTION("a common horizon is not woken by the lapse") {
+        int const ic = mgr.index_of("AH_common");
+        REQUIRE(ic >= 0);
+        REQUIRE(mgr.get(ic).state == horizon_state_t::dormant);
+        REQUIRE_FALSE(mgr.maybe_activate_on_lapse(ic, 0.0));
+        REQUIRE(mgr.get(ic).state == horizon_state_t::dormant);
+    }
+
+    SECTION("find_and_write reads the grid lapse and searches only once open") {
+        auto& rt = grace::runtime::get();
+        auto const saved_iter = rt.iteration();
+        rt.set_iteration(1000);   // a multiple of every find_every in the config
+
+        // Below any lapse on a Kerr-Schild grid: must stay dormant, unsearched.
+        e.activation_lapse = 1e-12;
+        e.state = horizon_state_t::dormant;
+        e.last  = horizon_result_t{};
+        e.last.iterations = -7;   // sentinel: a search would overwrite it
+        mgr.find_and_write();
+        REQUIRE(e.state == horizon_state_t::dormant);
+        REQUIRE(e.last.iterations == -7);
+
+        // Above every lapse: opens on the next scheduled find and searches.
+        e.activation_lapse = 2.0;
+        mgr.find_and_write();
+        REQUIRE(e.state != horizon_state_t::dormant);
+        REQUIRE(e.last.iterations != -7);
+        REQUIRE(e.last.found);
+
+        rt.set_iteration(saved_iter);
+    }
+
+    e.activation_lapse = saved_gate;
+    e.state            = saved_state;
+}
+
 TEST_CASE("Parent lists are validated, not trusted", "[horizon_manager]") {
     std::vector<std::string> const names{ "A", "B", "C" };
     std::vector<horizon_role_t> const roles{ horizon_role_t::individual,
