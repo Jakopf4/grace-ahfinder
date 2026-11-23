@@ -106,6 +106,7 @@ struct fuka_id_t {
         auto& coord_system = grace::coordinate_system::get() ; 
 
         const bool has_matter = (id_type=="NS" || id_type=="BNS" || id_type=="BHNS");
+        _has_matter = has_matter ;
         int64_t const nfields= has_matter? 4+6+6+4 : 4+6+6 ;
 
         _data  = vview_t("data_fuka", nfields, nx+2*ngz,ny+2*ngz,nz+2*ngz,nq) ; 
@@ -151,11 +152,18 @@ struct fuka_id_t {
         grmhd_id_t id ;
         eos_err_t eos_err ;
         bool reset_eps{false} ; // fixme
-        // FUKA's rho and eps are imported directly (slots 16 and 20 in _data);
-        // see import_kadath.cpp for the layout.
-        double e = _data(16,i,j,k,q) ; 
-        id.rho = _eos.rho__energy_cold_impl(e, eos_err) ; 
-        id.eps = e/id.rho - 1. ;
+        // Matter ID packs e = rho(1+eps) in slot 16 and v^i in 17-19; see
+        // import_kadath.cpp.  Vacuum ID (BH, BBH) allocates only the 16 metric
+        // slots, so reading 16-19 there is out of bounds: leave rho at zero,
+        // which takes the atmosphere branch below.
+        if (_has_matter) {
+            double e = _data(16,i,j,k,q) ; 
+            id.rho = _eos.rho__energy_cold_impl(e, eos_err) ; 
+            id.eps = e/id.rho - 1. ;
+        } else {
+            id.rho = 0.0 ;
+            id.eps = 0.0 ;
+        }
 
         auto rho_atm = atmo_params.rho_fl ; 
         auto ye_atm = atmo_params.ye_fl ; 
@@ -237,6 +245,7 @@ struct fuka_id_t {
     vview_t _data ; 
 
     bool zero_shift ; 
+    bool _has_matter{false} ;   //!< Whether _data holds the matter slots 16-19
 
 } ; 
 

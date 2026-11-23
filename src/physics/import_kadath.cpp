@@ -38,6 +38,7 @@
 #include <vector>
 #include <array>
 #include <type_traits>
+#include <tuple>
 
 
 #include <iostream>
@@ -85,6 +86,15 @@ void KadathImporter(const std::string kadath_id, const std::string  filename,
   #endif 
   GRACE_TRACE("Utilizing parallel exporters");
 
+  {
+    bool const has_matter = (id_type=="NS" || id_type=="BNS" || id_type=="BHNS");
+    int const want = has_matter ? static_cast<int>(NUM_VOUT) + 4
+                                : static_cast<int>(NUM_VOUT);
+    if (nfields != want || static_cast<int>(ddata.extent(0)) != want)
+      ERROR("FUKA import: " << id_type << " needs " << want << " fields, view holds "
+            << ddata.extent(0) << " (nfields = " << nfields << ").");
+  }
+
   // FUKA-geo <-> GRACE-geo unit conversion. FUKA uses legacy Margherita
   // constants (LENGTHGF = 6.77269e-6 cm^-1), GRACE uses CODATA-2018 +
   // IAU-2015 (LENGTHGF = 6.77220e-6 cm^-1). Mismatch is 73 ppm in length
@@ -102,6 +112,16 @@ void KadathImporter(const std::string kadath_id, const std::string  filename,
     {
       using kadath_output_t =
         std::vector<std::array<double, NUM_VOUT + NUM_MATTER * static_cast<int>(has_matter)>>;
+
+      // has_matter reads all_data_pt[K_RHO..K_VELZ] and writes data slots
+      // K_RHO..K_RHO+3.  Passed for a vacuum exporter, whose output array
+      // holds only NUM_VOUT values and whose target view only NUM_VOUT fields,
+      // both are out of bounds: garbage reads off the stack and writes past
+      // the end of the allocation.  That corrupted the heap on host builds
+      // (LayoutRight puts slot 16 after the whole view), so refuse it.
+      static_assert(!has_matter
+                    || std::tuple_size_v<typename reader_t::output_ary_t> > K_VELZ,
+                    "has_matter requested for an exporter without matter output");
 
       #pragma omp parallel for firstprivate(input_reader)
       for (size_t idx = 0; idx < xgrid.size(); ++idx) {
@@ -160,12 +180,16 @@ void KadathImporter(const std::string kadath_id, const std::string  filename,
     using config_t = Kadath::FUKA_Config::kadath_config_boost<Kadath::FUKA_Config::BCO_BH_INFO>;
     using reader_t = Kadath::FUKA_Solvers::CFMS_BH_Exporter;
     reader_t input_reader(filename.c_str()); 
-    interp_data_helper.template operator()<reader_t, true>(input_reader, xx,yy,zz);
+    // Vacuum: the BH exporter returns NUM_VOUT values and the target view
+    // holds NUM_VOUT fields, so the matter slots must not be touched.
+    interp_data_helper.template operator()<reader_t, false>(input_reader, xx,yy,zz);
   } else if(id_type == "BBH") {
     using config_t = Kadath::FUKA_Config::kadath_config_boost<Kadath::FUKA_Config::BIN_INFO>;
     using reader_t = Kadath::FUKA_Solvers::CFMS_BBH_Exporter;
     reader_t input_reader(filename.c_str()); 
-    interp_data_helper.template operator()<reader_t, true>(input_reader, xx,yy,zz);
+    // Vacuum: the BBH exporter returns NUM_VOUT values and the target view
+    // holds NUM_VOUT fields, so the matter slots must not be touched.
+    interp_data_helper.template operator()<reader_t, false>(input_reader, xx,yy,zz);
   } else if(id_type == "NS") {
     using config_t = Kadath::FUKA_Config::kadath_config_boost<Kadath::FUKA_Config::BCO_NS_INFO>;
     using reader_t = Kadath::FUKA_Solvers::CFMS_NS_Exporter;
